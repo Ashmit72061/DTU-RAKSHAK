@@ -7,6 +7,7 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+// ── Admin / User ─────────────────────────────────────────────────────────────
 model User {
   id           String   @id @default(uuid())
   email        String   @unique
@@ -18,4 +19,59 @@ model User {
   updatedAt DateTime @updatedAt
 
   @@map("users")
+}
+
+// ── Registered Vehicle (authorised sticker holders) ──────────────────────────
+model Vehicle {
+  id          String   @id @default(uuid())
+  name        String
+  fathersName String
+  dept        String
+  dateOfIssue DateTime
+  vehicleType String              // e.g. "2W", "4W", "Heavy"
+  stickerNo   String   @unique
+  vehicleNo   String   @unique
+  mobileNo    String
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  logs EntryExitLog[]
+
+  @@map("vehicles")
+}
+
+// ── Campus Camera ─────────────────────────────────────────────────────────────
+model Camera {
+  id             String @id @default(uuid())
+  lat            Float
+  long           Float
+  cameraType     String              // "ENTRY" | "EXIT" | "BOTH"
+  cameraLocation String
+
+  createdAt DateTime @default(now())
+
+  logs EntryExitLog[]
+
+  @@map("cameras")
+}
+
+// ── Entry / Exit Log ──────────────────────────────────────────────────────────
+model EntryExitLog {
+  id       String @id @default(uuid())
+  cameraId String
+  camera   Camera @relation(fields: [cameraId], references: [id])
+
+  vehicleNo String
+  vehicle   Vehicle? @relation(fields: [vehicleNo], references: [vehicleNo])
+
+  rawOcr          String            // raw OCR text from GLM-OCR
+  entryTime       DateTime          @default(now())
+  exitTime        DateTime?         // null = vehicle still inside
+  vehicleDuration Int?              // seconds between entry and exit
+  isAuthorized    Boolean           @default(false) // true if vehicleNo in Vehicle table
+
+  createdAt DateTime @default(now())
+
+  @@map("entry_exit_logs")
 }
