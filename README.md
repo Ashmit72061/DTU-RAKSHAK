@@ -102,6 +102,19 @@ npm run prisma:push       # create tables in your DB
 npm run dev               # runs on http://localhost:5000
 ```
 
+### 3. Model Setup (Python)
+
+```bash
+cd DTU-RAKSHAK/model
+python -m venv venv
+# Windows:
+.\venv\Scripts\activate
+# Linux/Mac:
+source venv/bin/activate
+
+pip install -r requirements.txt
+```
+
 ---
 
 ## Starting All Services
