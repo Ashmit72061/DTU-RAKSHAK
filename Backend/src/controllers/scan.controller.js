@@ -9,7 +9,7 @@ import asyncHandler from "../utils/asyncHandler.js";
 const KEY_VEHICLE   = (plate) => `vehicle:${plate}`;          // auth cache  (24h)
 const KEY_ACTIVE    = (plate) => `active:${plate}`;           // current entry log id
 const KEY_UNAUTH    = (plate) => `unauth:${plate}`;           // 30-min unauth window
-const UNAUTH_TTL    = 30 * 60;                                 // 30 minutes in seconds
+const UNAUTH_TTL    = 30 * 60;                                // 30 minutes in seconds
 const VEHICLE_TTL   = 24 * 60 * 60;                           // 24 hours
 
 // ── Plate normalisation + Indian plate format validation ───────────────────────
@@ -18,7 +18,12 @@ const VEHICLE_TTL   = 24 * 60 * 60;                           // 24 hours
 const PLATE_REGEX = /^[A-Z]{2}[0-9]{1,2}[A-Z]{1,3}[0-9]{4}$/;
 
 const normalisePlate = (raw) => {
-    const clean = raw.toUpperCase().replace(/\s/g, "").replace(/[-./]/g, "");
+    let clean = raw.toUpperCase().replace(/\s/g, "").replace(/[-./]/g, "");
+
+    // Strip known OCR noise prefix if present and remainder is a valid plate
+    const stripped = clean.replace(/^(INC|IND|VH|REG|NO|NUM)/, "");
+    if (PLATE_REGEX.test(stripped)) clean = stripped;
+
     if (!PLATE_REGEX.test(clean)) {
         throw new ApiError(
             StatusCodes.BAD_REQUEST,
@@ -109,12 +114,13 @@ export const processScan = asyncHandler(async (req, res) => {
     }
 
     // ── 4. Gate camera (ENTRY / EXIT / BOTH) ─────────────────────────────────
-    const activeKey   = KEY_ACTIVE(vehicleNo);
-    const activeLogId = await redis.get(activeKey);
+    const activeKey     = KEY_ACTIVE(vehicleNo);
+    const activeRaw     = await redis.get(activeKey);
+    const activeSession = activeRaw ? JSON.parse(activeRaw) : null;
 
     // ── 4a. AUTHORIZED vehicle ────────────────────────────────────────────────
     if (isAuthorized) {
-        if (!activeLogId) {
+        if (!activeSession) {
             // ── ENTRY ──
             const log = await prisma.entryExitLog.create({
                 data: {
@@ -131,7 +137,8 @@ export const processScan = asyncHandler(async (req, res) => {
             });
 
             // Cache active session
-            await redis.setex(activeKey, VEHICLE_TTL, log.id);
+            // Store logId + entryTime so EXIT needs zero extra DB queries
+            await redis.setex(activeKey, VEHICLE_TTL, JSON.stringify({ logId: log.id, entryTime: scanTime.toISOString() }));
 
             return res.status(StatusCodes.OK).json(
                 new ApiResponse(StatusCodes.OK, {
@@ -147,13 +154,26 @@ export const processScan = asyncHandler(async (req, res) => {
         } else {
             // ── EXIT ──
             const exitTime = scanTime;
-            const openLog  = await prisma.entryExitLog.findUnique({ where: { id: activeLogId } });
-            const duration = openLog
-                ? Math.round((exitTime - openLog.entryTime) / 1000)
+
+            // ── Pull logId + entryTime from Redis (no extra DB query) ──────────
+            let logId     = activeSession?.logId     ?? null;
+            let entryTime = activeSession?.entryTime ? new Date(activeSession.entryTime) : null;
+
+            // ── DB fallback — Redis was flushed mid-session ───────────────────
+            if (!logId || !entryTime) {
+                const fallback = await prisma.entryExitLog.findFirst({
+                    where:   { vehicleNo, logType: "ENTRY", exitTime: null },
+                    orderBy: { entryTime: "desc" },
+                });
+                if (fallback) { logId = fallback.id; entryTime = fallback.entryTime; }
+            }
+
+            const duration = entryTime
+                ? Math.round((exitTime - entryTime) / 1000)
                 : null;
 
             const log = await prisma.entryExitLog.update({
-                where: { id: activeLogId },
+                where: { id: logId },
                 data: {
                     logType:         "EXIT",
                     exitTime,
@@ -184,7 +204,7 @@ export const processScan = asyncHandler(async (req, res) => {
     const unauthKey  = KEY_UNAUTH(vehicleNo);
     const unauthData = await redis.get(unauthKey);
 
-    if (!unauthData && !activeLogId) {
+    if (!unauthData && !activeSession) {
         // ── First time seen → ENTRY + start 30-min window ──
         const log = await prisma.entryExitLog.create({
             data: {
@@ -202,8 +222,8 @@ export const processScan = asyncHandler(async (req, res) => {
 
         const allowedUntil = new Date(scanTime.getTime() + UNAUTH_TTL * 1000).toISOString();
         await redis.setex(unauthKey, UNAUTH_TTL, JSON.stringify({ logId: log.id, entryTime: scanTime, allowedUntil }));
-        await redis.setex(activeKey, UNAUTH_TTL, log.id);
-
+        await redis.setex(activeKey, UNAUTH_TTL, JSON.stringify({ logId: log.id, entryTime: scanTime.toISOString() }));
+ 
         return res.status(StatusCodes.OK).json(
             new ApiResponse(StatusCodes.OK, {
                 event:          "ENTRY",
@@ -224,11 +244,12 @@ export const processScan = asyncHandler(async (req, res) => {
         const now       = new Date();
         const isOverdue = now > new Date(allowedUntil);
 
+        // Shared by both branches
+        const exitTime = scanTime;
+        const duration = Math.round((exitTime - new Date(entryTime)) / 1000);
+
         if (isOverdue) {
             // ── OVERSTAY ALERT ──
-            // Close the log
-            const exitTime = scanTime;
-            const duration = Math.round((exitTime - new Date(entryTime)) / 1000);
 
             await prisma.entryExitLog.update({
                 where: { id: logId },
@@ -251,9 +272,7 @@ export const processScan = asyncHandler(async (req, res) => {
             );
         }
 
-        // ── Still within window → EXIT or sighting ──
-        const exitTime = scanTime;
-        const duration = Math.round((exitTime - new Date(entryTime)) / 1000);
+        // ── Still within window → normal EXIT ──
 
         const log = await prisma.entryExitLog.update({
             where: { id: logId },
