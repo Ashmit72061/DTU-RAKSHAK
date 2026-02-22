@@ -12,7 +12,7 @@ export const createCamera = asyncHandler(async (req, res) => {
         throw new ApiError(StatusCodes.BAD_REQUEST, "lat, long, cameraType, and cameraLocation are required");
     }
 
-    const VALID_TYPES = ["ENTRY", "EXIT", "BOTH"];
+    const VALID_TYPES = ["ENTRY", "EXIT", "BOTH", "INTERIOR"];
     if (!VALID_TYPES.includes(cameraType.toUpperCase())) {
         throw new ApiError(StatusCodes.BAD_REQUEST, `cameraType must be one of: ${VALID_TYPES.join(", ")}`);
     }
@@ -58,7 +58,7 @@ export const updateCamera = asyncHandler(async (req, res) => {
     const { lat, long, cameraType, cameraLocation } = req.body;
 
     if (cameraType) {
-        const VALID_TYPES = ["ENTRY", "EXIT", "BOTH"];
+        const VALID_TYPES = ["ENTRY", "EXIT", "BOTH", "INTERIOR"];
         if (!VALID_TYPES.includes(cameraType.toUpperCase())) {
             throw new ApiError(StatusCodes.BAD_REQUEST, `cameraType must be one of: ${VALID_TYPES.join(", ")}`);
         }
