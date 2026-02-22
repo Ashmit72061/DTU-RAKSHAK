@@ -17,6 +17,6 @@ router.post("/",     createCamera);
 router.get("/",      getCameras);
 router.get("/:id",   getCamera);
 router.put("/:id",   updateCamera);
-router.delete("/:id", deleteCamera);
+router.delete("/:id",deleteCamera);
 
 export default router;

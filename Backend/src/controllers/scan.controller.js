@@ -1,106 +1,321 @@
 import { StatusCodes } from "http-status-codes";
 import prisma from "../models/prisma.js";
+import redis from "../models/redis.js";
 import ApiError from "../utils/ApiError.js";
 import ApiResponse from "../utils/ApiResponse.js";
 import asyncHandler from "../utils/asyncHandler.js";
-import { detectNumberPlate, parsePlate } from "../services/ai.service.js";
 
-// ── POST /api/v1/scan ─────────────────────────────────────────────────────────
-// Body: multipart/form-data — image (file) + camera_id (string)
+// ── Redis key helpers ──────────────────────────────────────────────────────────
+const KEY_VEHICLE   = (plate) => `vehicle:${plate}`;          // auth cache  (24h)
+const KEY_ACTIVE    = (plate) => `active:${plate}`;           // current entry log id
+const KEY_UNAUTH    = (plate) => `unauth:${plate}`;           // 30-min unauth window
+const UNAUTH_TTL    = 30 * 60;                                 // 30 minutes in seconds
+const VEHICLE_TTL   = 24 * 60 * 60;                           // 24 hours
+
+// ── Plate normalisation + Indian plate format validation ───────────────────────
+// Indian format: 2 letters (state) + 1-2 digits (district) + 1-3 letters (series) + 4 digits
+// e.g.  DL3CAF0001  |  MH12AB1234  |  UP32K5678  |  HR26A0001
+const PLATE_REGEX = /^[A-Z]{2}[0-9]{1,2}[A-Z]{1,3}[0-9]{4}$/;
+
+const normalisePlate = (raw) => {
+    const clean = raw.toUpperCase().replace(/\s/g, "").replace(/[-./]/g, "");
+    if (!PLATE_REGEX.test(clean)) {
+        throw new ApiError(
+            StatusCodes.BAD_REQUEST,
+            `Invalid number plate format: "${raw}". Expected Indian format e.g. DL3CAF0001`
+        );
+    }
+    return clean;
+};
+
+// ── Check / populate vehicle auth from Redis → DB ─────────────────────────────
+async function resolveVehicle(vehicleNo) {
+    const cacheKey = KEY_VEHICLE(vehicleNo);
+    const cached   = await redis.get(cacheKey);
+
+    if (cached) {
+        return JSON.parse(cached);            // cache hit
+    }
+
+    // cache miss → query DB
+    const dbVehicle = await prisma.vehicle.findUnique({ where: { vehicleNo } });
+    const payload   = dbVehicle
+        ? { isAuthorized: true,  name: dbVehicle.name, dept: dbVehicle.dept, vehicleType: dbVehicle.vehicleType }
+        : { isAuthorized: false };
+
+    await redis.setex(cacheKey, VEHICLE_TTL, JSON.stringify(payload));
+    return payload;
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+//  POST /api/v1/scan
 //
-// Logic:
-//   1. Forward image + camera_id to Flask AI service
-//   2. Parse raw OCR → clean plate number
-//   3. Check if plate is in Vehicle table (isAuthorized)
-//   4. Find open entry log for this plate:
-//        – none found  → ENTRY: create new log
-//        – found       → EXIT:  update log with exitTime + vehicleDuration
-// ─────────────────────────────────────────────────────────────────────────────
-export const scanPlate = asyncHandler(async (req, res) => {
-    const { camera_id } = req.body;
+//  Accepts JSON from hardware / mock:
+//  {
+//    "camera_id"  : "uuid",
+//    "vehicle_no" : "DL3CAF0001",
+//    "timestamp"  : "2025-02-22T15:00:00Z",   // ISO string (optional, defaults to now)
+//    "confidence" : 0.94,                       // optional
+//    "raw_plate"  : "DL 3C AF 0001"            // raw string from hardware (optional)
+//  }
+// ══════════════════════════════════════════════════════════════════════════════
 
-    if (!req.file) throw new ApiError(StatusCodes.BAD_REQUEST, "Image file is required (field: 'image')");
-    if (!camera_id) throw new ApiError(StatusCodes.BAD_REQUEST, "camera_id is required");
+export const processScan = asyncHandler(async (req, res) => {
+    const { camera_id, vehicle_no, timestamp, confidence, raw_plate } = req.body;
 
-    // Verify camera exists
+    if (!camera_id)  throw new ApiError(StatusCodes.BAD_REQUEST, "camera_id is required");
+    if (!vehicle_no) throw new ApiError(StatusCodes.BAD_REQUEST, "vehicle_no is required");
+
+    const vehicleNo  = normalisePlate(vehicle_no);
+    const rawPlate   = raw_plate || vehicleNo;
+    const scanTime   = timestamp ? new Date(timestamp) : new Date();
+    const confScore  = confidence ? parseFloat(confidence) : null;
+
+    // ── 1. Verify camera ──────────────────────────────────────────────────────
     const camera = await prisma.camera.findUnique({ where: { id: camera_id } });
     if (!camera) throw new ApiError(StatusCodes.NOT_FOUND, `Camera not found: ${camera_id}`);
 
-    // ── Call Flask AI service ─────────────────────────────────────────────────
-    const aiResult = await detectNumberPlate(req.file.buffer, req.file.originalname, camera_id);
+    // ── 2. Resolve vehicle auth (Redis → DB) ──────────────────────────────────
+    const authInfo     = await resolveVehicle(vehicleNo);
+    const isAuthorized = authInfo.isAuthorized;
 
-    if (!aiResult.plates || aiResult.plates.length === 0) {
+    // ── 3. Choose behaviour by camera type ────────────────────────────────────
+    // INTERIOR cameras = sighting only (no entry/exit gate logic)
+    if (camera.cameraType === "INTERIOR") {
+        const log = await prisma.entryExitLog.create({
+            data: {
+                cameraId:        camera_id,
+                vehicleNo,
+                logType:         "SIGHTING",
+                rawPlate,
+                confidence:      confScore,
+                isAuthorized,
+                vehicleCategory: isAuthorized ? "REGISTERED" : "UNVERIFIED",
+                entryTime:       scanTime,
+            },
+            include: { camera: true, vehicle: true },
+        });
+
         return res.status(StatusCodes.OK).json(
-            new ApiResponse(StatusCodes.OK, { detected: false, camera_id, timestamp: aiResult.timestamp }, "No plate detected in image")
+            new ApiResponse(StatusCodes.OK, {
+                event:          "SIGHTING",
+                vehicleNo,
+                isAuthorized,
+                vehicleInfo:    isAuthorized ? authInfo : null,
+                camera:         { id: camera.id, location: camera.cameraLocation, type: camera.cameraType },
+                log,
+            }, `Vehicle ${vehicleNo} sighted at ${camera.cameraLocation}`)
         );
     }
 
-    // Process each detected plate (usually 1)
-    const logs = [];
-    for (const plateData of aiResult.plates) {
-        const { plate: vehicleNo, valid, raw_ocr } = plateData;
+    // ── 4. Gate camera (ENTRY / EXIT / BOTH) ─────────────────────────────────
+    const activeKey   = KEY_ACTIVE(vehicleNo);
+    const activeLogId = await redis.get(activeKey);
 
-        // ── Check authorization ───────────────────────────────────────────────
-        const registeredVehicle = await prisma.vehicle.findUnique({ where: { vehicleNo } });
-        const isAuthorized = !!registeredVehicle;
-
-        // ── Find open entry log ───────────────────────────────────────────────
-        const openLog = await prisma.entryExitLog.findFirst({
-            where: { vehicleNo, exitTime: null },
-            orderBy: { entryTime: "desc" },
-        });
-
-        let log;
-
-        if (!openLog) {
-            // ── ENTRY ─────────────────────────────────────────────────────────
-            log = await prisma.entryExitLog.create({
+    // ── 4a. AUTHORIZED vehicle ────────────────────────────────────────────────
+    if (isAuthorized) {
+        if (!activeLogId) {
+            // ── ENTRY ──
+            const log = await prisma.entryExitLog.create({
                 data: {
-                    cameraId:     camera_id,
+                    cameraId:        camera_id,
                     vehicleNo,
-                    rawOcr:       raw_ocr,
-                    isAuthorized,
-                    entryTime:    new Date(aiResult.timestamp),
+                    logType:         "ENTRY",
+                    rawPlate,
+                    confidence:      confScore,
+                    isAuthorized:    true,
+                    vehicleCategory: "REGISTERED",
+                    entryTime:       scanTime,
                 },
                 include: { camera: true, vehicle: true },
             });
-        } else {
-            // ── EXIT ──────────────────────────────────────────────────────────
-            const exitTime = new Date(aiResult.timestamp);
-            const vehicleDuration = Math.round((exitTime - openLog.entryTime) / 1000); // seconds
 
-            log = await prisma.entryExitLog.update({
-                where: { id: openLog.id },
-                data:  { exitTime, vehicleDuration },
+            // Cache active session
+            await redis.setex(activeKey, VEHICLE_TTL, log.id);
+
+            return res.status(StatusCodes.OK).json(
+                new ApiResponse(StatusCodes.OK, {
+                    event:       "ENTRY",
+                    vehicleNo,
+                    isAuthorized: true,
+                    vehicleInfo:  authInfo,
+                    message:     "✅ Entry granted — registered vehicle",
+                    camera:      { id: camera.id, location: camera.cameraLocation },
+                    log,
+                }, "Entry granted")
+            );
+        } else {
+            // ── EXIT ──
+            const exitTime = scanTime;
+            const openLog  = await prisma.entryExitLog.findUnique({ where: { id: activeLogId } });
+            const duration = openLog
+                ? Math.round((exitTime - openLog.entryTime) / 1000)
+                : null;
+
+            const log = await prisma.entryExitLog.update({
+                where: { id: activeLogId },
+                data: {
+                    logType:         "EXIT",
+                    exitTime,
+                    vehicleDuration: duration,
+                    cameraId:        camera_id,     // exit camera may differ from entry camera
+                },
                 include: { camera: true, vehicle: true },
             });
-        }
 
-        logs.push({ ...log, event: openLog ? "EXIT" : "ENTRY" });
+            await redis.del(activeKey);
+
+            return res.status(StatusCodes.OK).json(
+                new ApiResponse(StatusCodes.OK, {
+                    event:           "EXIT",
+                    vehicleNo,
+                    isAuthorized:    true,
+                    vehicleInfo:     authInfo,
+                    vehicleDuration: duration,
+                    message:         "👋 Exit recorded — registered vehicle",
+                    camera:          { id: camera.id, location: camera.cameraLocation },
+                    log,
+                }, "Exit recorded")
+            );
+        }
     }
 
+    // ── 4b. UNAUTHORIZED vehicle (cab / auto / taxi / delivery) ───────────────
+    const unauthKey  = KEY_UNAUTH(vehicleNo);
+    const unauthData = await redis.get(unauthKey);
+
+    if (!unauthData && !activeLogId) {
+        // ── First time seen → ENTRY + start 30-min window ──
+        const log = await prisma.entryExitLog.create({
+            data: {
+                cameraId:        camera_id,
+                vehicleNo,
+                logType:         "ENTRY",
+                rawPlate,
+                confidence:      confScore,
+                isAuthorized:    false,
+                vehicleCategory: "UNVERIFIED",
+                entryTime:       scanTime,
+            },
+            include: { camera: true, vehicle: true },
+        });
+
+        const allowedUntil = new Date(scanTime.getTime() + UNAUTH_TTL * 1000).toISOString();
+        await redis.setex(unauthKey, UNAUTH_TTL, JSON.stringify({ logId: log.id, entryTime: scanTime, allowedUntil }));
+        await redis.setex(activeKey, UNAUTH_TTL, log.id);
+
+        return res.status(StatusCodes.OK).json(
+            new ApiResponse(StatusCodes.OK, {
+                event:          "ENTRY",
+                vehicleNo,
+                isAuthorized:   false,
+                vehicleCategory: "UNVERIFIED",
+                message:        "⚠️ Unverified vehicle — allowed. 30-minute stay limit applies.",
+                allowedUntil,
+                camera:         { id: camera.id, location: camera.cameraLocation },
+                log,
+            }, "Unverified vehicle entry — 30-min limit")
+        );
+    }
+
+    if (unauthData) {
+        // ── Vehicle seen again — check if within window ──
+        const { logId, entryTime, allowedUntil } = JSON.parse(unauthData);
+        const now       = new Date();
+        const isOverdue = now > new Date(allowedUntil);
+
+        if (isOverdue) {
+            // ── OVERSTAY ALERT ──
+            // Close the log
+            const exitTime = scanTime;
+            const duration = Math.round((exitTime - new Date(entryTime)) / 1000);
+
+            await prisma.entryExitLog.update({
+                where: { id: logId },
+                data: { logType: "EXIT", exitTime, vehicleDuration: duration },
+            });
+            await redis.del(unauthKey);
+            await redis.del(activeKey);
+
+            return res.status(StatusCodes.OK).json(
+                new ApiResponse(StatusCodes.OK, {
+                    event:            "OVERSTAY_EXIT",
+                    vehicleNo,
+                    isAuthorized:     false,
+                    vehicleCategory:  "UNVERIFIED",
+                    message:          "🚨 ALERT: Unverified vehicle overstayed 30-minute limit!",
+                    allowedUntil,
+                    vehicleDuration:  duration,
+                    camera:           { id: camera.id, location: camera.cameraLocation },
+                }, "⚠️ Unverified vehicle overstay alert")
+            );
+        }
+
+        // ── Still within window → EXIT or sighting ──
+        const exitTime = scanTime;
+        const duration = Math.round((exitTime - new Date(entryTime)) / 1000);
+
+        const log = await prisma.entryExitLog.update({
+            where: { id: logId },
+            data: { logType: "EXIT", exitTime, vehicleDuration: duration },
+            include: { camera: true, vehicle: true },
+        });
+        await redis.del(unauthKey);
+        await redis.del(activeKey);
+
+        return res.status(StatusCodes.OK).json(
+            new ApiResponse(StatusCodes.OK, {
+                event:            "EXIT",
+                vehicleNo,
+                isAuthorized:     false,
+                vehicleCategory:  "UNVERIFIED",
+                message:          "👋 Unverified vehicle exited within allowed window.",
+                vehicleDuration:  duration,
+                allowedUntil,
+                camera:           { id: camera.id, location: camera.cameraLocation },
+                log,
+            }, "Unverified vehicle exit")
+        );
+    }
+
+    // Fallback — no open log, not in unauth cache
     return res.status(StatusCodes.OK).json(
-        new ApiResponse(StatusCodes.OK, { detected: true, logs }, "Scan processed successfully")
+        new ApiResponse(StatusCodes.OK, {
+            vehicleNo,
+            isAuthorized: false,
+            vehicleCategory: "UNVERIFIED",
+            message: "⚠️ Unverified vehicle — no active session found.",
+        }, "Unverified vehicle, no session")
     );
 });
 
-// ── GET /api/v1/scan/logs ─────────────────────────────────────────────────────
-// All logs, paginated. Optional ?authorized=true/false
-export const getLogs = asyncHandler(async (req, res) => {
-    const { page = 1, limit = 20, authorized } = req.query;
-    const skip = (parseInt(page) - 1) * parseInt(limit);
 
-    const where = authorized !== undefined
-        ? { isAuthorized: authorized === "true" }
-        : {};
+// ══════════════════════════════════════════════════════════════════════════════
+//  GET /api/v1/scan/logs
+//  Query: page, limit, authorized (true/false), from, to, cameraId, logType
+// ══════════════════════════════════════════════════════════════════════════════
+
+export const getLogs = asyncHandler(async (req, res) => {
+    const { page = 1, limit = 20, authorized, from, to, cameraId, logType } = req.query;
+    const skip  = (parseInt(page) - 1) * parseInt(limit);
+
+    const where = {};
+    if (authorized !== undefined)   where.isAuthorized = authorized === "true";
+    if (cameraId)                   where.cameraId     = cameraId;
+    if (logType)                    where.logType      = logType.toUpperCase();
+    if (from || to) {
+        where.entryTime = {};
+        if (from) where.entryTime.gte = new Date(from);
+        if (to)   where.entryTime.lte = new Date(to);
+    }
 
     const [logs, total] = await Promise.all([
         prisma.entryExitLog.findMany({
             where,
             skip,
-            take: parseInt(limit),
-            orderBy: { entryTime: "desc" },
-            include: { camera: true, vehicle: true },
+            take:     parseInt(limit),
+            orderBy:  { entryTime: "desc" },
+            include:  { camera: true, vehicle: true },
         }),
         prisma.entryExitLog.count({ where }),
     ]);
@@ -110,32 +325,69 @@ export const getLogs = asyncHandler(async (req, res) => {
     );
 });
 
-// ── GET /api/v1/scan/logs/active ──────────────────────────────────────────────
-// Vehicles currently inside campus (entry with no exit)
+
+// ══════════════════════════════════════════════════════════════════════════════
+//  GET /api/v1/scan/logs/active
+//  Vehicles with no exit (currently on campus)
+// ══════════════════════════════════════════════════════════════════════════════
 export const getActiveLogs = asyncHandler(async (req, res) => {
     const logs = await prisma.entryExitLog.findMany({
-        where: { exitTime: null },
+        where:   { exitTime: null, logType: "ENTRY" },
         orderBy: { entryTime: "desc" },
         include: { camera: true, vehicle: true },
     });
 
+    // Enrich unverified with remaining time from Redis
+    const enriched = await Promise.all(logs.map(async (log) => {
+        if (!log.isAuthorized) {
+            const unauthData = await redis.get(KEY_UNAUTH(log.vehicleNo));
+            if (unauthData) {
+                const { allowedUntil } = JSON.parse(unauthData);
+                const remaining = Math.max(0, Math.round((new Date(allowedUntil) - Date.now()) / 1000));
+                return { ...log, allowedUntil, remainingSeconds: remaining, isOverdue: remaining === 0 };
+            }
+        }
+        return log;
+    }));
+
     return res.status(StatusCodes.OK).json(
-        new ApiResponse(StatusCodes.OK, { count: logs.length, logs }, "Active vehicles fetched")
+        new ApiResponse(StatusCodes.OK, { count: enriched.length, logs: enriched }, "Active vehicles fetched")
     );
 });
 
-// ── GET /api/v1/scan/logs/:vehicleNo ──────────────────────────────────────────
-// All logs for a specific vehicle
+
+// ══════════════════════════════════════════════════════════════════════════════
+//  GET /api/v1/scan/logs/:vehicleNo
+//  All logs for a specific plate, with optional date range
+// ══════════════════════════════════════════════════════════════════════════════
 export const getLogsByVehicle = asyncHandler(async (req, res) => {
-    const vehicleNo = req.params.vehicleNo.toUpperCase().replace(/\s/g, "");
+    const vehicleNo = normalisePlate(req.params.vehicleNo);
+    const { from, to } = req.query;
+
+    const where = { vehicleNo };
+    if (from || to) {
+        where.entryTime = {};
+        if (from) where.entryTime.gte = new Date(from);
+        if (to)   where.entryTime.lte = new Date(to);
+    }
 
     const logs = await prisma.entryExitLog.findMany({
-        where: { vehicleNo },
+        where,
         orderBy: { entryTime: "desc" },
         include: { camera: true, vehicle: true },
     });
 
+    // Also return current Redis status
+    const activeLogId = await redis.get(KEY_ACTIVE(vehicleNo));
+    const unauthData  = await redis.get(KEY_UNAUTH(vehicleNo));
+
     return res.status(StatusCodes.OK).json(
-        new ApiResponse(StatusCodes.OK, { vehicleNo, count: logs.length, logs }, "Vehicle logs fetched")
+        new ApiResponse(StatusCodes.OK, {
+            vehicleNo,
+            count:          logs.length,
+            logs,
+            currentlyOnCampus: !!activeLogId,
+            unauthStatus:   unauthData ? JSON.parse(unauthData) : null,
+        }, "Vehicle logs fetched")
     );
 });
