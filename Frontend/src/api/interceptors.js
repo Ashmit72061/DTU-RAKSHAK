@@ -64,8 +64,9 @@ export function attachAuthInterceptors(instance, { TOKEN_KEY, REFRESH_URL, LOGIN
             const isUnauthorized = status === 401;
             const isRefreshCall = originalRequest.url === REFRESH_URL;
             const isAlreadyRetried = originalRequest._retry;
+            const isAuthRoute = originalRequest.url?.startsWith('/auth/');
 
-            if (!isUnauthorized || isAlreadyRetried || isRefreshCall) {
+            if (!isUnauthorized || isAlreadyRetried || isRefreshCall || isAuthRoute) {
                 if (isUnauthorized && isRefreshCall) forceLogout(LOGIN_PATH);
                 return Promise.reject(error);
             }
