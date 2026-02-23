@@ -28,7 +28,7 @@ model Vehicle {
   fathersName String
   dept        String
   dateOfIssue DateTime
-  vehicleType String              // e.g. "2W", "4W", "Heavy"
+  vehicleType String              // "2W" | "4W" | "Heavy" | "Electric"
   stickerNo   String   @unique
   vehicleNo   String   @unique
   mobileNo    String
@@ -46,7 +46,7 @@ model Camera {
   id             String @id @default(uuid())
   lat            Float
   long           Float
-  cameraType     String              // "ENTRY" | "EXIT" | "BOTH"
+  cameraType     String  // "ENTRY" | "EXIT" | "BOTH" | "INTERIOR"
   cameraLocation String
 
   createdAt DateTime @default(now())
@@ -56,7 +56,13 @@ model Camera {
   @@map("cameras")
 }
 
-// ── Entry / Exit Log ──────────────────────────────────────────────────────────
+// ── Entry / Exit / Sighting Log ───────────────────────────────────────────────
+// logType:
+//   ENTRY    – vehicle entered campus (gate camera, no prior open log)
+//   EXIT     – vehicle exited campus  (gate camera, closes an ENTRY log)
+//   SIGHTING – vehicle spotted at interior/area camera (no entry/exit impact)
+
+
 model EntryExitLog {
   id       String @id @default(uuid())
   cameraId String
@@ -65,11 +71,15 @@ model EntryExitLog {
   vehicleNo String
   vehicle   Vehicle? @relation(fields: [vehicleNo], references: [vehicleNo])
 
-  rawOcr          String            // raw OCR text from GLM-OCR
-  entryTime       DateTime          @default(now())
-  exitTime        DateTime?         // null = vehicle still inside
-  vehicleDuration Int?              // seconds between entry and exit
-  isAuthorized    Boolean           @default(false) // true if vehicleNo in Vehicle table
+  logType         String    @default("ENTRY")  // "ENTRY" | "EXIT" | "SIGHTING"
+  confidence      Float?                        // confidence score from hardware JSON
+  rawPlate        String                        // plate string as received from hardware
+  entryTime       DateTime  @default(now())
+  exitTime        DateTime?                     // null unless EXIT
+  vehicleDuration Int?                          // seconds (gate cameras only)
+  isAuthorized    Boolean   @default(false)     // true if vehicleNo in Vehicle table
+  vehicleCategory String    @default("REGISTERED") 
+  // "REGISTERED" | "UNVERIFIED" (cab/auto/taxi/delivery – 30-min window)
 
   createdAt DateTime @default(now())
 

@@ -13,7 +13,7 @@ export const createVehicle = asyncHandler(async (req, res) => {
     }
 
     const existing = await prisma.vehicle.findFirst({
-        where: { OR: [{ vehicleNo }, { stickerNo }] },
+        where: { OR: [{ vehicleNo: vehicleNo.toUpperCase().replace(/\s/g, "") }, { stickerNo }] },
     });
     if (existing) {
         throw new ApiError(StatusCodes.CONFLICT, "Vehicle number or sticker number already registered");
