@@ -1,16 +1,80 @@
-# React + Vite
+# DTU Rakshak — Frontend
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+Smart vehicle campus monitoring system for Delhi Technological University. Built with **React 19 + Vite 7**.
 
-Currently, two official plugins are available:
+## Quick Start
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Babel](https://babeljs.io/) (or [oxc](https://oxc.rs) when used in [rolldown-vite](https://vite.dev/guide/rolldown)) for Fast Refresh
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/) for Fast Refresh
+```bash
+npm install
+npm run dev       # Dev server at http://localhost:5173
+npm run build     # Production build → dist/
+npm run preview   # Preview production build
+npm run lint      # ESLint
+```
 
-## React Compiler
+> **Requires:** Node.js ≥ 18 and the backend running on port 5000 (Vite proxies `/api` → `http://localhost:5000`).
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+## Tech Stack
 
-## Expanding the ESLint configuration
+| Layer | Technology |
+|---|---|
+| Framework | React 19 |
+| Build Tool | Vite 7 |
+| Routing | React Router v7 |
+| HTTP Client | Axios |
+| Charts | Recharts |
+| Icons | Lucide React |
+| Styling | Vanilla CSS (Inter font) |
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and [`typescript-eslint`](https://typescript-eslint.io) in your project.
+## Key Features
+
+- **OTP-based auth** — Email + password, then 6-digit OTP verification
+- **Dashboard** — Real-time stats, line/pie charts, recent scan activity
+- **Vehicle registry** — Full CRUD with search, pagination, modal forms
+- **Camera management** — Register/edit/delete CCTV cameras at campus gates
+- **Entry/exit logs** — Tabbed view (All / On-Campus / Unauthorized) with filters
+
+## Project Structure
+
+```
+Frontend/
+├── public/               # Static assets (DTU logo, favicon)
+├── src/
+│   ├── main.jsx          # React entry point
+│   ├── App.jsx           # Root routing + auth guards
+│   ├── api.js            # Axios instance + all API functions
+│   ├── index.css         # Global design system
+│   ├── components/       # Reusable UI components
+│   │   └── Sidebar.jsx
+│   ├── pages/            # Route-level page components
+│   │   ├── Landing.jsx
+│   │   ├── Login.jsx
+│   │   ├── Signup.jsx
+│   │   ├── Dashboard.jsx
+│   │   ├── Vehicles.jsx
+│   │   ├── Cameras.jsx
+│   │   └── Logs.jsx
+│   └── assets/           # Bundled assets (SVGs, images)
+├── vite.config.js        # Vite config + API proxy
+├── eslint.config.js      # ESLint flat config
+├── FRONTEND_DOCS.md      # Comprehensive documentation
+└── package.json
+```
+
+## Documentation
+
+See **[FRONTEND_DOCS.md](./FRONTEND_DOCS.md)** for:
+- Full architecture & data flow diagrams
+- Detailed page-by-page reference
+- API layer documentation
+- Design system & CSS tokens
+- Scalability guide for new features
+
+## Scripts
+
+| Script | Description |
+|---|---|
+| `npm run dev` | Start Vite dev server with HMR |
+| `npm run build` | Production build to `dist/` |
+| `npm run preview` | Serve the production build locally |
+| `npm run lint` | Run ESLint on all `.js` and `.jsx` files |

@@ -23,7 +23,7 @@ export default function Vehicles() {
       const res = await getVehicles({ search, page, limit: LIMIT });
       setVehicles(res.data.data.vehicles);
       setTotal(res.data.data.total);
-    } catch {}
+    } catch { }
   }
 
   useEffect(() => { load(); }, [search, page]);
@@ -46,7 +46,7 @@ export default function Vehicles() {
   }
 
   async function handleDelete() {
-    try { await deleteVehicle(deleteId); setDeleteId(null); load(); } catch {}
+    try { await deleteVehicle(deleteId); setDeleteId(null); load(); } catch { }
   }
 
   const pages = Math.ceil(total / LIMIT);
@@ -162,7 +162,26 @@ export default function Vehicles() {
               <div className="form-row">
                 <div className="form-group">
                   <label className="form-label">Mobile No.</label>
-                  <input className="form-input" required value={form.mobileNo} onChange={e => setForm(f => ({ ...f, mobileNo: e.target.value }))} />
+                  <div className="phone-group">
+                    <select
+                      className="form-select phone-code-select"
+                      value={form.countryCode}
+                      onChange={e => setForm(f => ({ ...f, countryCode: e.target.value }))}
+                    >
+                      {COUNTRY_CODES.map(c => (
+                        <option key={c.code} value={c.code}>{c.flag} {c.code}</option>
+                      ))}
+                    </select>
+                    <input className="form-input phone-input" required
+                      placeholder="9876543269" inputMode="numeric"
+                      pattern="\d{10}" maxLength={10} minLength={10}
+                      title="Enter a valid 10-digit mobile number"
+                      value={form.mobileNo}
+                      onChange={e => {
+                        const val = e.target.value.replace(/\D/g, '').slice(0, 10);
+                        setForm(f => ({ ...f, mobileNo: val }));
+                      }} />
+                  </div>
                 </div>
                 <div className="form-group">
                   <label className="form-label">Date of Issue</label>
