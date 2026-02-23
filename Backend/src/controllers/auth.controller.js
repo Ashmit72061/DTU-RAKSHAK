@@ -47,7 +47,8 @@ const generateTokensAndPersist = async (user) => {
 // ────────────────────────────────────────────────────────────────
 
 export const signup = asyncHandler(async (req, res) => {
-    const { email, password } = req.body;
+    const { password } = req.body;
+    const email = req.body.email?.trim().toLowerCase();
 
     if (!email || !password) {
         throw new ApiError(StatusCodes.BAD_REQUEST, "Email and password are required");
@@ -84,7 +85,8 @@ export const signup = asyncHandler(async (req, res) => {
 // ────────────────────────────────────────────────────────────────
 
 export const verifySignupOtp = asyncHandler(async (req, res) => {
-    const { email, otp } = req.body;
+    const { otp } = req.body;
+    const email = req.body.email?.trim().toLowerCase();
 
     if (!email || !otp) {
         throw new ApiError(StatusCodes.BAD_REQUEST, "Email and OTP are required");
@@ -118,7 +120,8 @@ export const verifySignupOtp = asyncHandler(async (req, res) => {
 // ────────────────────────────────────────────────────────────────
 
 export const signin = asyncHandler(async (req, res) => {
-    const { email, password } = req.body;
+    const { password } = req.body;
+    const email = req.body.email?.trim().toLowerCase();
 
     if (!email || !password) {
         throw new ApiError(StatusCodes.BAD_REQUEST, "Email and password are required");
@@ -154,7 +157,8 @@ export const signin = asyncHandler(async (req, res) => {
 // ────────────────────────────────────────────────────────────────
 
 export const verifySigninOtp = asyncHandler(async (req, res) => {
-    const { email, otp } = req.body;
+    const { otp } = req.body;
+    const email = req.body.email?.trim().toLowerCase();
 
     if (!email || !otp) {
         throw new ApiError(StatusCodes.BAD_REQUEST, "Email and OTP are required");

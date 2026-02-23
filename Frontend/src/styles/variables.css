@@ -1,0 +1,79 @@
+/* ══════════════════════════════════════════════════════════════
+   DESIGN TOKENS + GLOBAL RESET
+   ══════════════════════════════════════════════════════════════ */
+
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
+
+:root {
+  /* ── Brand ── */
+  --green: #27AE60;
+  --green-dk: #1e8449;
+  --green-lt: #eafaf1;
+  --red: #e74c3c;
+  --red-lt: #fdf0ef;
+  --amber: #f39c12;
+  --amber-lt: #fef9ec;
+  --blue: #2980b9;
+  --maroon: #8B1A1A;
+
+  /* ── Surfaces ── */
+  --sidebar: #0d1117;
+  --bg: #f4f6f9;
+  --card: #ffffff;
+  --border: #e1e4e8;
+
+  /* ── Text ── */
+  --text: #1a1a2e;
+  --muted: #6c757d;
+
+  /* ── Effects ── */
+  --shadow: 0 2px 12px rgba(0, 0, 0, .08);
+  --radius: 12px;
+
+  /* ── Typography ── */
+  --font: 'Inter', sans-serif;
+
+  /* ── Layout ── */
+  --sidebar-width: 240px;
+  --mobile-header-height: 56px;
+}
+
+/* ── Reset ── */
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  font-family: var(--font);
+  background: var(--bg);
+  color: var(--text);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+a {
+  text-decoration: none;
+  color: inherit;
+}
+
+button {
+  cursor: pointer;
+  font-family: var(--font);
+}
+
+input,
+select,
+textarea {
+  font-family: var(--font);
+}
+
+img {
+  max-width: 100%;
+  height: auto;
+}

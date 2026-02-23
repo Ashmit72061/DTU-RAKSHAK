@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import Sidebar from './components/Sidebar';
+import MobileHeader from './components/MobileHeader';
 import Landing from './pages/Landing';
 import Login from './pages/Login';
 import Signup from './pages/Signup';
@@ -10,9 +11,12 @@ import Cameras from './pages/Cameras';
 import Logs from './pages/Logs';
 
 function PrivateLayout({ children }) {
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+
   return (
     <div className="layout">
-      <Sidebar />
+      <MobileHeader onToggleSidebar={() => setSidebarOpen(true)} />
+      <Sidebar isOpen={sidebarOpen} onClose={() => setSidebarOpen(false)} />
       {children}
     </div>
   );

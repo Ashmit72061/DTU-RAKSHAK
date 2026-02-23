@@ -14,7 +14,7 @@ export default function Cameras() {
   const [error, setError] = useState('');
   const [deleteId, setDeleteId] = useState(null);
 
-  async function load() { try { const r = await getCameras(); setCameras(r.data.data); } catch {} }
+  async function load() { try { const r = await getCameras(); setCameras(r.data.data); } catch { } }
   useEffect(() => { load(); }, []);
 
   function openAdd() { setForm(EMPTY); setError(''); setModal('add'); }
@@ -31,7 +31,7 @@ export default function Cameras() {
   }
 
   async function handleDelete() {
-    try { await deleteCamera(deleteId); setDeleteId(null); load(); } catch {}
+    try { await deleteCamera(deleteId); setDeleteId(null); load(); } catch { }
   }
 
   return (
@@ -55,19 +55,15 @@ export default function Cameras() {
                 <tr><td colSpan={6}><div className="empty"><MapPin /><p>No cameras registered yet</p></div></td></tr>
               ) : cameras.map(c => (
                 <tr key={c.id}>
-                  <td>
-                    <div style={{ fontWeight: 600 }}>{c.cameraLocation}</div>
-                  </td>
+                  <td className="cell-bold">{c.cameraLocation}</td>
                   <td><span className={`badge ${TYPE_COLORS[c.cameraType]}`}>{c.cameraType}</span></td>
-                  <td style={{ fontSize: 12, color: 'var(--muted)', fontFamily: 'monospace' }}>
-                    {c.lat.toFixed(4)}, {c.long.toFixed(4)}
-                  </td>
-                  <td style={{ fontSize: 11, fontFamily: 'monospace', color: 'var(--muted)' }}>{c.id.slice(0, 8)}…</td>
-                  <td style={{ fontSize: 13 }}>{new Date(c.createdAt).toLocaleDateString('en-IN')}</td>
+                  <td className="cell-mono">{c.lat.toFixed(4)}, {c.long.toFixed(4)}</td>
+                  <td className="cell-mono-sm">{c.id.slice(0, 8)}…</td>
+                  <td className="cell-sm">{new Date(c.createdAt).toLocaleDateString('en-IN')}</td>
                   <td>
-                    <div style={{ display: 'flex', gap: 8 }}>
-                      <button className="btn btn-secondary" style={{ padding: '6px 10px' }} onClick={() => openEdit(c)}><Pencil size={14} /></button>
-                      <button className="btn btn-danger" style={{ padding: '6px 10px' }} onClick={() => setDeleteId(c.id)}><Trash2 size={14} /></button>
+                    <div className="actions-row">
+                      <button className="btn btn-secondary btn-icon" onClick={() => openEdit(c)}><Pencil size={14} /></button>
+                      <button className="btn btn-danger btn-icon" onClick={() => setDeleteId(c.id)}><Trash2 size={14} /></button>
                     </div>
                   </td>
                 </tr>
@@ -122,12 +118,12 @@ export default function Cameras() {
 
       {deleteId && (
         <div className="modal-overlay" onClick={() => setDeleteId(null)}>
-          <div className="modal" onClick={e => e.stopPropagation()} style={{ maxWidth: 380 }}>
+          <div className="modal modal-sm" onClick={e => e.stopPropagation()}>
             <div className="modal-header">
               <h2>Remove Camera</h2>
               <button className="modal-close" onClick={() => setDeleteId(null)}>×</button>
             </div>
-            <p style={{ color: 'var(--muted)', marginBottom: 20 }}>Remove this camera from the campus network?</p>
+            <p className="modal-body-text">Remove this camera from the campus network?</p>
             <div className="form-actions">
               <button className="btn btn-secondary" onClick={() => setDeleteId(null)}>Cancel</button>
               <button className="btn btn-danger" onClick={handleDelete}>Remove</button>

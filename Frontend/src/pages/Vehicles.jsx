@@ -2,8 +2,15 @@ import { useEffect, useState } from 'react';
 import { Plus, Search, Pencil, Trash2 } from 'lucide-react';
 import { getVehicles, createVehicle, updateVehicle, deleteVehicle } from '../api';
 
-const EMPTY = { name: '', fathersName: '', dept: '', dateOfIssue: '', vehicleType: '2W', stickerNo: '', vehicleNo: '', mobileNo: '' };
+const EMPTY = { name: '', fathersName: '', dept: '', dateOfIssue: '', vehicleType: '2W', stickerNo: '', vehicleNo: '', mobileNo: '', countryCode: '+91' };
 const TYPES = ['2W', '4W', 'Heavy', 'Electric'];
+const COUNTRY_CODES = [
+  { code: '+91', flag: '🇮🇳' },
+  { code: '+1', flag: '🇺🇸' },
+  { code: '+44', flag: '🇬🇧' },
+  { code: '+61', flag: '🇦🇺' },
+  { code: '+971', flag: '🇦🇪' },
+];
 
 export default function Vehicles() {
   const [vehicles, setVehicles] = useState([]);
@@ -30,7 +37,7 @@ export default function Vehicles() {
 
   function openAdd() { setForm(EMPTY); setError(''); setModal('add'); }
   function openEdit(v) {
-    setForm({ ...v, dateOfIssue: v.dateOfIssue?.split('T')[0] || '' });
+    setForm({ ...v, dateOfIssue: v.dateOfIssue?.split('T')[0] || '', countryCode: v.countryCode || '+91' });
     setError(''); setModal('edit');
   }
 
@@ -68,7 +75,7 @@ export default function Vehicles() {
             <input className="search-input" placeholder="Search by plate, name, dept…"
               value={search} onChange={e => { setSearch(e.target.value); setPage(1); }} />
           </div>
-          <span style={{ color: 'var(--muted)', fontSize: 13 }}>{total} records</span>
+          <span className="records-count">{total} records</span>
         </div>
 
         <div className="table-wrap">
@@ -86,17 +93,17 @@ export default function Vehicles() {
                 <tr key={v.id}>
                   <td><span className="plate">{v.vehicleNo}</span></td>
                   <td>
-                    <div style={{ fontWeight: 600, fontSize: 14 }}>{v.name}</div>
-                    <div style={{ color: 'var(--muted)', fontSize: 12 }}>S/o {v.fathersName}</div>
+                    <div className="cell-bold">{v.name}</div>
+                    <div className="cell-sub">S/o {v.fathersName}</div>
                   </td>
                   <td><span className="badge blue">{v.dept}</span></td>
                   <td><span className="badge gray">{v.vehicleType}</span></td>
-                  <td style={{ fontSize: 13 }}>{v.stickerNo}</td>
-                  <td style={{ fontSize: 13 }}>{v.mobileNo}</td>
+                  <td className="cell-sm">{v.stickerNo}</td>
+                  <td className="cell-sm">{v.mobileNo}</td>
                   <td>
-                    <div style={{ display: 'flex', gap: 8 }}>
-                      <button className="btn btn-secondary" style={{ padding: '6px 10px' }} onClick={() => openEdit(v)}><Pencil size={14} /></button>
-                      <button className="btn btn-danger" style={{ padding: '6px 10px' }} onClick={() => setDeleteId(v.vehicleNo)}><Trash2 size={14} /></button>
+                    <div className="actions-row">
+                      <button className="btn btn-secondary btn-icon" onClick={() => openEdit(v)}><Pencil size={14} /></button>
+                      <button className="btn btn-danger btn-icon" onClick={() => setDeleteId(v.vehicleNo)}><Trash2 size={14} /></button>
                     </div>
                   </td>
                 </tr>
@@ -106,10 +113,10 @@ export default function Vehicles() {
         </div>
 
         {pages > 1 && (
-          <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 16 }}>
+          <div className="pagination">
             {Array.from({ length: pages }, (_, i) => (
-              <button key={i} className={`btn ${page === i + 1 ? 'btn-primary' : 'btn-secondary'}`}
-                style={{ padding: '6px 12px' }} onClick={() => setPage(i + 1)}>{i + 1}</button>
+              <button key={i} className={`btn ${page === i + 1 ? 'btn-primary' : 'btn-secondary'} btn-icon`}
+                onClick={() => setPage(i + 1)}>{i + 1}</button>
             ))}
           </div>
         )}
@@ -202,12 +209,12 @@ export default function Vehicles() {
       {/* Delete confirm */}
       {deleteId && (
         <div className="modal-overlay" onClick={() => setDeleteId(null)}>
-          <div className="modal" onClick={e => e.stopPropagation()} style={{ maxWidth: 380 }}>
+          <div className="modal modal-sm" onClick={e => e.stopPropagation()}>
             <div className="modal-header">
               <h2>Delete Vehicle</h2>
               <button className="modal-close" onClick={() => setDeleteId(null)}>×</button>
             </div>
-            <p style={{ color: 'var(--muted)', marginBottom: 20 }}>
+            <p className="modal-body-text">
               Remove <strong>{deleteId}</strong> from the campus registry? This cannot be undone.
             </p>
             <div className="form-actions">

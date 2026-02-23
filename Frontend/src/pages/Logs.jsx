@@ -25,18 +25,18 @@ export default function Logs() {
       const r = await getLogs(params);
       setLogs(r.data.data.logs);
       setTotal(r.data.data.total);
-    } catch {}
+    } catch { }
   }
 
   async function loadActive() {
-    try { const r = await getActiveLogs(); setActiveLogs(r.data.data.logs); } catch {}
+    try { const r = await getActiveLogs(); setActiveLogs(r.data.data.logs); } catch { }
   }
 
   useEffect(() => { loadAll(); loadActive(); }, [page, filter]);
 
   const displayed = tab === 'active' ? activeLogs
     : tab === 'unauthorized' ? logs.filter(l => !l.isAuthorized)
-    : logs;
+      : logs;
 
   const filtered = search
     ? displayed.filter(l => l.vehicleNo.includes(search.toUpperCase()) || l.camera?.cameraLocation?.toLowerCase().includes(search.toLowerCase()))
@@ -51,7 +51,7 @@ export default function Logs() {
           <h2>Entry / Exit Logs</h2>
           <p>All vehicle movement records on DTU campus</p>
         </div>
-        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+        <div className="topbar-right">
           <span className="badge green">{activeLogs.length} Inside Campus</span>
         </div>
       </div>
@@ -76,7 +76,7 @@ export default function Logs() {
               value={search} onChange={e => setSearch(e.target.value)} />
           </div>
           {tab === 'all' && (
-            <select className="form-select" style={{ width: 160 }} value={filter} onChange={e => { setFilter(e.target.value); setPage(1); }}>
+            <select className="form-select filter-select" value={filter} onChange={e => { setFilter(e.target.value); setPage(1); }}>
               <option value="all">All Vehicles</option>
               <option value="true">Authorized Only</option>
               <option value="false">Unauthorized Only</option>
@@ -104,14 +104,14 @@ export default function Logs() {
                 <tr key={l.id}>
                   <td><span className="plate">{l.vehicleNo}</span></td>
                   <td>
-                    <div style={{ fontWeight: 500, fontSize: 13 }}>{l.camera?.cameraLocation || '—'}</div>
-                    <div style={{ fontSize: 11, color: 'var(--muted)' }}>{l.camera?.cameraType}</div>
+                    <div className="cell-bold">{l.camera?.cameraLocation || '—'}</div>
+                    <div className="cell-sub">{l.camera?.cameraType}</div>
                   </td>
-                  <td style={{ fontSize: 13 }}>{new Date(l.entryTime).toLocaleString('en-IN')}</td>
-                  <td style={{ fontSize: 13, color: l.exitTime ? 'inherit' : 'var(--muted)' }}>
+                  <td className="cell-sm">{new Date(l.entryTime).toLocaleString('en-IN')}</td>
+                  <td className={`cell-sm ${!l.exitTime ? 'cell-muted' : ''}`}>
                     {l.exitTime ? new Date(l.exitTime).toLocaleString('en-IN') : 'Still Inside'}
                   </td>
-                  <td style={{ fontSize: 13 }}>{fmt(l.vehicleDuration)}</td>
+                  <td className="cell-sm">{fmt(l.vehicleDuration)}</td>
                   <td>
                     <span className={`badge ${l.isAuthorized ? 'green' : 'red'}`}>
                       {l.isAuthorized ? '✓ Auth' : '✗ Unauth'}
@@ -129,10 +129,10 @@ export default function Logs() {
         </div>
 
         {tab === 'all' && pages > 1 && (
-          <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 16 }}>
+          <div className="pagination">
             {Array.from({ length: pages }, (_, i) => (
-              <button key={i} className={`btn ${page === i + 1 ? 'btn-primary' : 'btn-secondary'}`}
-                style={{ padding: '6px 12px' }} onClick={() => setPage(i + 1)}>{i + 1}</button>
+              <button key={i} className={`btn ${page === i + 1 ? 'btn-primary' : 'btn-secondary'} btn-icon`}
+                onClick={() => setPage(i + 1)}>{i + 1}</button>
             ))}
           </div>
         )}

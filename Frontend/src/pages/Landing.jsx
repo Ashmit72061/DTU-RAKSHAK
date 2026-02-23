@@ -1,5 +1,5 @@
 import { Link } from 'react-router-dom';
-import { useEffect, useRef } from 'react';
+import { useEffect, useState } from 'react';
 
 const features = [
   { icon: '🎯', title: 'Real-Time Detection', desc: 'AI-powered YOLO model detects and reads number plates from CCTV feeds with high accuracy.' },
@@ -11,7 +11,7 @@ const features = [
 ];
 
 const team = [
-  { name: 'Sonal Khanak', role: 'Backend & AI Integration', emoji: '👨‍💻' },
+  { name: 'Team Member 1', role: 'Backend & AI Integration', emoji: '👨‍💻' },
   { name: 'Team Member 2', role: 'Frontend & UI/UX', emoji: '🎨' },
   { name: 'Team Member 3', role: 'ML Model & Training', emoji: '🤖' },
   { name: 'Team Member 4', role: 'System Architecture', emoji: '⚙️' },
@@ -47,6 +47,7 @@ function useScrollReveal() {
 
 export default function Landing() {
   useScrollReveal();
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
   return (
     <div className="landing">
@@ -63,8 +64,24 @@ export default function Landing() {
           <a href="#team">Team</a>
         </div>
         <div className="landing-nav-actions">
-          <Link to="/login"  className="btn btn-secondary nav-btn">Sign In</Link>
+          <Link to="/login" className="btn btn-secondary nav-btn">Sign In</Link>
           <Link to="/signup" className="btn btn-primary  nav-btn">Register</Link>
+        </div>
+        <button
+          className="landing-mobile-toggle"
+          onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
+          aria-label="Toggle navigation"
+        >
+          {mobileMenuOpen ? '✕' : '☰'}
+        </button>
+
+        {/* Mobile dropdown menu */}
+        <div className={`landing-mobile-menu ${mobileMenuOpen ? 'open' : ''}`}>
+          <a href="#features" onClick={() => setMobileMenuOpen(false)}>Features</a>
+          <a href="#how" onClick={() => setMobileMenuOpen(false)}>How It Works</a>
+          <a href="#team" onClick={() => setMobileMenuOpen(false)}>Team</a>
+          <Link to="/login" onClick={() => setMobileMenuOpen(false)}>Sign In</Link>
+          <Link to="/signup" onClick={() => setMobileMenuOpen(false)}>Register →</Link>
         </div>
       </header>
 
@@ -97,7 +114,7 @@ export default function Landing() {
             Automated number plate detection, authorization checks, and duration monitoring — all in one system.
           </p>
           <div className="landing-hero-btns">
-            <Link to="/login"  className="btn btn-primary  hero-cta">Access Dashboard →</Link>
+            <Link to="/login" className="btn btn-primary  hero-cta">Access Dashboard →</Link>
             <Link to="/signup" className="btn btn-outline  hero-cta-outline">Create Account</Link>
           </div>
           <div className="landing-hero-stats">
@@ -117,7 +134,7 @@ export default function Landing() {
             <img src="/dtu-logo.png" alt="DTU" className="hero-logo-big" />
           </div>
           <div className="hero-orbit">
-            {['🎯','📷','🚨','📊'].map((ic, i) => (
+            {['🎯', '📷', '🚨', '📊'].map((ic, i) => (
               <div key={i} className="orbit-dot" style={{ '--i': i }}>
                 <span>{ic}</span>
               </div>

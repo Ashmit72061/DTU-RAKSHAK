@@ -66,7 +66,7 @@ export default function Signup({ onLogin }) {
             <div className="form-group">
               <label className="form-label">Email Address</label>
               <input className="form-input" type="email" placeholder="admin@dtu.ac.in"
-                value={email} onChange={e => setEmail(e.target.value)} required />
+                value={email} onChange={e => setEmail(e.target.value.toLowerCase())} required />
             </div>
             <div className="form-group">
               <label className="form-label">Password</label>

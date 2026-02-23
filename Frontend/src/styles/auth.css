@@ -1,0 +1,93 @@
+/* ══════════════════════════════════════════════════════════════
+   AUTH PAGES — Login / Signup
+   ══════════════════════════════════════════════════════════════ */
+
+.auth-page {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(135deg, #0d1117 0%, #161b22 50%, #0d1117 100%);
+  padding: 20px;
+}
+
+.auth-card {
+  background: #fff;
+  border-radius: 20px;
+  padding: 36px 40px;
+  width: 100%;
+  max-width: 400px;
+  box-shadow: 0 32px 80px rgba(0, 0, 0, .3);
+  animation: slideUp .3s ease;
+}
+
+.auth-logo {
+  text-align: center;
+  margin-bottom: 24px;
+}
+
+.auth-logo img {
+  width: 64px;
+  height: 64px;
+  border-radius: 50%;
+  object-fit: cover;
+}
+
+.auth-logo h1 {
+  font-size: 20px;
+  font-weight: 800;
+  color: var(--text);
+  margin-top: 10px;
+}
+
+.auth-logo p {
+  font-size: 13px;
+  color: var(--muted);
+  margin-top: 3px;
+}
+
+.auth-subtitle {
+  text-align: center;
+  font-size: 13px;
+  color: var(--muted);
+  margin-bottom: 20px;
+}
+
+.auth-switch {
+  text-align: center;
+  font-size: 13px;
+  color: var(--muted);
+  margin-top: 16px;
+}
+
+.auth-switch a {
+  color: var(--green);
+  font-weight: 600;
+}
+
+/* ── OTP Grid ── */
+.otp-grid {
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 8px;
+  margin-bottom: 20px;
+}
+
+.otp-input {
+  text-align: center;
+  padding: 10px 4px;
+  border-radius: 10px;
+  border: 1.5px solid var(--border);
+  font-size: 22px;
+  font-weight: 700;
+  outline: none;
+  transition: border-color .2s;
+  background: #f8f9fa;
+  width: 100%;
+  aspect-ratio: 1;
+}
+
+.otp-input:focus {
+  border-color: var(--green);
+  background: #fff;
+}

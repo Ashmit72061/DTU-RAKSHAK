@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Car, Camera, ClipboardList, AlertTriangle } from 'lucide-react';
-import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, Legend } from 'recharts';
+import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
 import { getLogs, getActiveLogs, getVehicles, getCameras } from '../api';
 
 const COLORS = ['#27AE60', '#e74c3c', '#f39c12', '#2980b9'];
@@ -57,9 +57,9 @@ export default function Dashboard() {
 
   const statCards = [
     { label: 'Registered Vehicles', value: stats.vehicles, icon: Car, cls: 'green' },
-    { label: 'Active Cameras',       value: stats.cameras, icon: Camera, cls: 'blue' },
-    { label: 'Vehicles on Campus',   value: stats.active, icon: ClipboardList, cls: 'amber' },
-    { label: 'Unauthorized Today',   value: stats.unauthorized, icon: AlertTriangle, cls: 'red' },
+    { label: 'Active Cameras', value: stats.cameras, icon: Camera, cls: 'blue' },
+    { label: 'Vehicles on Campus', value: stats.active, icon: ClipboardList, cls: 'amber' },
+    { label: 'Unauthorized Today', value: stats.unauthorized, icon: AlertTriangle, cls: 'red' },
   ];
 
   return (
@@ -69,7 +69,7 @@ export default function Dashboard() {
           <h2>Campus Dashboard</h2>
           <p>Real-time vehicle monitoring — Delhi Technological University</p>
         </div>
-        <img src="/dtu-logo.png" alt="DTU" style={{ width: 48, height: 48, borderRadius: '50%' }} />
+        <img src="/dtu-logo.png" alt="DTU" className="topbar-logo" />
       </div>
 
       {/* Stats */}
@@ -118,9 +118,9 @@ export default function Dashboard() {
 
       {/* Recent Logs */}
       <div className="card">
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
-          <h3 style={{ fontSize: 15, fontWeight: 700 }}>Recent Scan Activity</h3>
-          <a href="/logs" style={{ fontSize: 13, color: 'var(--green)', fontWeight: 600 }}>View all →</a>
+        <div className="card-header-row">
+          <h3>Recent Scan Activity</h3>
+          <a href="/logs">View all →</a>
         </div>
         <div className="table-wrap">
           <table>
@@ -132,13 +132,13 @@ export default function Dashboard() {
             </thead>
             <tbody>
               {recentLogs.length === 0 && !loading ? (
-                <tr><td colSpan={5} style={{ textAlign: 'center', color: 'var(--muted)', padding: 24 }}>No scan logs yet</td></tr>
+                <tr><td colSpan={5}><div className="empty"><p>No scan logs yet</p></div></td></tr>
               ) : recentLogs.map(l => (
                 <tr key={l.id}>
                   <td><span className="plate">{l.vehicleNo}</span></td>
-                  <td style={{ fontSize: 12, color: 'var(--muted)' }}>{l.camera?.cameraLocation || '—'}</td>
-                  <td style={{ fontSize: 13 }}>{new Date(l.entryTime).toLocaleString('en-IN')}</td>
-                  <td style={{ fontSize: 13 }}>{fmt(l.vehicleDuration)}</td>
+                  <td className="cell-sub">{l.camera?.cameraLocation || '—'}</td>
+                  <td className="cell-sm">{new Date(l.entryTime).toLocaleString('en-IN')}</td>
+                  <td className="cell-sm">{fmt(l.vehicleDuration)}</td>
                   <td>
                     <span className={`badge ${l.isAuthorized ? 'green' : 'red'}`}>
                       {l.isAuthorized ? '✓ Authorized' : '✗ Unauthorized'}
