@@ -16,10 +16,8 @@ const requiredVars = [
   "ACCESS_TOKEN_EXPIRY",
   "REFRESH_TOKEN_SECRET",
   "REFRESH_TOKEN_EXPIRY",
-  "SMTP_HOST",
-  "SMTP_PORT",
-  "SMTP_USER",
-  "SMTP_PASS",
+  "RESEND_API_KEY",
+  "EMAIL_FROM",
   "OTP_EXPIRY_MINUTES",
 ];
 
@@ -49,11 +47,9 @@ const env = Object.freeze({
   refreshTokenSecret: process.env.REFRESH_TOKEN_SECRET,
   refreshTokenExpiry: process.env.REFRESH_TOKEN_EXPIRY,
 
-  // SMTP
-  smtpHost: process.env.SMTP_HOST,
-  smtpPort: parseInt(process.env.SMTP_PORT, 10),
-  smtpUser: process.env.SMTP_USER,
-  smtpPass: process.env.SMTP_PASS,
+  // Resend
+  resendApiKey: process.env.RESEND_API_KEY,
+  emailFrom: process.env.EMAIL_FROM,
 
   // OTP
   otpExpiryMinutes: parseInt(process.env.OTP_EXPIRY_MINUTES, 10),

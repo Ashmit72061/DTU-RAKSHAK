@@ -15,7 +15,6 @@
     "prisma:studio": "prisma studio --schema=src/prisma/schema.prisma"
   },
   "dependencies": {
-    "prisma": "6.19.2",
     "@prisma/client": "6.19.2",
     "bcrypt": "^6.0.0",
     "cookie-parser": "^1.4.7",
@@ -31,9 +30,8 @@
     "morgan": "^1.10.1",
     "multer": "^2.0.2",
     "node-fetch": "^3.3.2",
-    "nodemailer": "^8.0.1",
-    "nodemon": "^3.1.11"
-  },
-  "devDependencies": {
+    "nodemon": "^3.1.11",
+    "prisma": "6.19.2",
+    "resend": "^6.9.2"
   }
 }

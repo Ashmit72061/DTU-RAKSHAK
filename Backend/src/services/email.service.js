@@ -1,30 +1,23 @@
-import nodemailer from "nodemailer";
+import { Resend } from "resend";
 import env from "../configs/env.config.js";
 
-const transporter = nodemailer.createTransport({
-    host: env.smtpHost,
-    port: env.smtpPort,
-    secure: env.smtpPort === 465,
-    auth: {
-        user: env.smtpUser,
-        pass: env.smtpPass,
-    },
-});
+// Single shared Resend instance — SDK handles retries and connection pooling internally.
+const resend = new Resend(env.resendApiKey);
 
 /**
  * Send an OTP email to the specified address.
  *
- * @param {string} to - Recipient email address
- * @param {string} otp - The OTP code
- * @param {"SIGNUP"|"SIGNIN"} type - Purpose of the OTP
+ * @param {string} to                    - Recipient email address
+ * @param {string} otp                   - The OTP code to include
+ * @param {"SIGNUP"|"SIGNIN"} type       - Purpose of the OTP (controls subject and copy)
  */
 export const sendOtpEmail = async (to, otp, type) => {
-    const subject =
-        type === "SIGNUP"
-            ? "Verify your email — Signup OTP"
-            : "Sign-in verification — OTP";
+  const subject =
+    type === "SIGNUP"
+      ? "Verify your email — Signup OTP"
+      : "Sign-in verification — OTP";
 
-    const html = `
+  const html = `
     <div style="font-family: 'Segoe UI', Arial, sans-serif; max-width: 480px; margin: 0 auto; padding: 32px;">
       <h2 style="color: #1a1a2e; margin-bottom: 16px;">
         ${type === "SIGNUP" ? "Welcome! Verify your email" : "Sign-in verification"}
@@ -40,10 +33,14 @@ export const sendOtpEmail = async (to, otp, type) => {
     </div>
   `;
 
-    await transporter.sendMail({
-        from: `"CCTV Project" <${env.smtpUser}>`,
-        to,
-        subject,
-        html,
-    });
+  const { error } = await resend.emails.send({
+    from: env.emailFrom,
+    to,
+    subject,
+    html,
+  });
+
+  if (error) {
+    throw new Error(`Resend delivery failed: ${error.message}`);
+  }
 };
