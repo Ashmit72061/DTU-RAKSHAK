@@ -1,8 +1,11 @@
 import { StatusCodes } from "http-status-codes";
+import { parse } from "csv-parse/sync";
 import prisma from "../models/prisma.js";
 import ApiError from "../utils/ApiError.js";
 import ApiResponse from "../utils/ApiResponse.js";
 import asyncHandler from "../utils/asyncHandler.js";
+
+const VALID_CAMERA_TYPES = ["ENTRY", "EXIT", "BOTH", "INTERIOR"];
 
 // ── POST /api/v1/cameras ──────────────────────────────────────────────────────
 export const createCamera = asyncHandler(async (req, res) => {
@@ -67,9 +70,9 @@ export const updateCamera = asyncHandler(async (req, res) => {
     const camera = await prisma.camera.update({
         where: { id: req.params.id },
         data: {
-            ...(lat           && { lat: parseFloat(lat) }),
-            ...(long          && { long: parseFloat(long) }),
-            ...(cameraType    && { cameraType: cameraType.toUpperCase() }),
+            ...(lat && { lat: parseFloat(lat) }),
+            ...(long && { long: parseFloat(long) }),
+            ...(cameraType && { cameraType: cameraType.toUpperCase() }),
             ...(cameraLocation && { cameraLocation }),
         },
     });
@@ -88,5 +91,81 @@ export const deleteCamera = asyncHandler(async (req, res) => {
 
     return res.status(StatusCodes.OK).json(
         new ApiResponse(StatusCodes.OK, null, "Camera deleted successfully")
+    );
+});
+
+// ── POST /api/v1/cameras/bulk ─────────────────────────────────────────────────
+export const bulkImportCameras = asyncHandler(async (req, res) => {
+    if (!req.file) {
+        throw new ApiError(StatusCodes.BAD_REQUEST, "CSV file is required");
+    }
+
+    let rows;
+    try {
+        rows = parse(req.file.buffer, {
+            columns: true,
+            skip_empty_lines: true,
+            trim: true,
+        });
+    } catch {
+        throw new ApiError(StatusCodes.BAD_REQUEST, "Invalid CSV format — could not parse file");
+    }
+
+    if (rows.length === 0) {
+        return res.status(StatusCodes.OK).json(
+            new ApiResponse(StatusCodes.OK, { inserted: 0, skipped: 0, errors: [] }, "CSV was empty — nothing to import")
+        );
+    }
+
+    const errors = [];
+    const validRecords = [];
+
+    for (let i = 0; i < rows.length; i++) {
+        const row = rows[i];
+        const rowNum = i + 2;
+
+        // --- required field check ---
+        const missing = ["lat", "long", "cameraType", "cameraLocation"].filter(f => !row[f]?.trim());
+        if (missing.length) {
+            errors.push({ row: rowNum, reason: `Missing required fields: ${missing.join(", ")}` });
+            continue;
+        }
+
+        // --- numeric validation ---
+        const lat = parseFloat(row.lat);
+        const long = parseFloat(row.long);
+        if (isNaN(lat) || isNaN(long)) {
+            errors.push({ row: rowNum, reason: `lat and long must be valid numbers` });
+            continue;
+        }
+
+        // --- cameraType enum validation ---
+        const cameraType = row.cameraType.toUpperCase().trim();
+        if (!VALID_CAMERA_TYPES.includes(cameraType)) {
+            errors.push({ row: rowNum, reason: `Invalid cameraType "${row.cameraType}" — must be one of: ${VALID_CAMERA_TYPES.join(", ")}` });
+            continue;
+        }
+
+        validRecords.push({
+            lat,
+            long,
+            cameraType,
+            cameraLocation: row.cameraLocation.trim(),
+        });
+    }
+
+    const result = await prisma.camera.createMany({
+        data: validRecords,
+        skipDuplicates: true,
+    });
+
+    const skipped = validRecords.length - result.count;
+
+    return res.status(StatusCodes.OK).json(
+        new ApiResponse(
+            StatusCodes.OK,
+            { inserted: result.count, skipped, errors },
+            `Bulk import complete: ${result.count} inserted, ${skipped} skipped, ${errors.length} errors`
+        )
     );
 });

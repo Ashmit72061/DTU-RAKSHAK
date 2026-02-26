@@ -1,6 +1,6 @@
-import { useEffect, useState } from 'react';
-import { Plus, Search, Pencil, Trash2 } from 'lucide-react';
-import { getVehicles, createVehicle, updateVehicle, deleteVehicle } from '../api';
+import { useEffect, useRef, useState } from 'react';
+import { Plus, Search, Pencil, Trash2, Upload, Download, FileText, CheckCircle, AlertCircle, XCircle } from 'lucide-react';
+import { getVehicles, createVehicle, updateVehicle, deleteVehicle, bulkImportVehicles } from '../api';
 
 const EMPTY = { name: '', fathersName: '', dept: '', dateOfIssue: '', vehicleType: '2W', stickerNo: '', vehicleNo: '', mobileNo: '', countryCode: '+91' };
 const TYPES = ['2W', '4W', 'Heavy', 'Electric'];
@@ -12,16 +12,28 @@ const COUNTRY_CODES = [
   { code: '+971', flag: '🇦🇪' },
 ];
 
+const VEHICLE_CSV_TEMPLATE =
+  'name,fathersName,dept,dateOfIssue,vehicleType,stickerNo,vehicleNo,mobileNo\n' +
+  'Ravi Kumar,Suresh Kumar,ECE,2024-08-01,2W,STK-001,DL3CAF0001,9876543210\n' +
+  'Priya Singh,Mohan Singh,MBA,2024-09-15,4W,STK-002,HR26DK5678,9123456780\n';
+
 export default function Vehicles() {
   const [vehicles, setVehicles] = useState([]);
   const [total, setTotal] = useState(0);
   const [search, setSearch] = useState('');
   const [page, setPage] = useState(1);
-  const [modal, setModal] = useState(null); // null | 'add' | 'edit'
+  const [modal, setModal] = useState(null); // null | 'add' | 'edit' | 'csv'
   const [form, setForm] = useState(EMPTY);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
   const [deleteId, setDeleteId] = useState(null);
+
+  // — CSV import state —
+  const [csvFile, setCsvFile] = useState(null);
+  const [csvDragging, setCsvDragging] = useState(false);
+  const [csvUploading, setCsvUploading] = useState(false);
+  const [csvResult, setCsvResult] = useState(null); // { inserted, skipped, errors }
+  const fileInputRef = useRef(null);
 
   const LIMIT = 15;
 
@@ -40,6 +52,10 @@ export default function Vehicles() {
     setForm({ ...v, dateOfIssue: v.dateOfIssue?.split('T')[0] || '', countryCode: v.countryCode || '+91' });
     setError(''); setModal('edit');
   }
+  function openCsv() {
+    setCsvFile(null); setCsvResult(null); setError('');
+    setModal('csv');
+  }
 
   async function handleSave(e) {
     e.preventDefault(); setSaving(true); setError('');
@@ -56,6 +72,39 @@ export default function Vehicles() {
     try { await deleteVehicle(deleteId); setDeleteId(null); load(); } catch { }
   }
 
+  // — CSV drag-and-drop handlers —
+  function onDragOver(e) { e.preventDefault(); setCsvDragging(true); }
+  function onDragLeave() { setCsvDragging(false); }
+  function onDrop(e) {
+    e.preventDefault(); setCsvDragging(false);
+    const f = e.dataTransfer.files[0];
+    if (f) pickFile(f);
+  }
+  function pickFile(f) {
+    if (!f.name.endsWith('.csv')) { setError('Please select a .csv file'); return; }
+    setError(''); setCsvFile(f); setCsvResult(null);
+  }
+
+  function downloadTemplate() {
+    const blob = new Blob([VEHICLE_CSV_TEMPLATE], { type: 'text/csv' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = 'vehicles_template.csv'; a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  async function handleCsvUpload() {
+    if (!csvFile) { setError('Please select a CSV file first'); return; }
+    setCsvUploading(true); setError(''); setCsvResult(null);
+    try {
+      const res = await bulkImportVehicles(csvFile);
+      setCsvResult(res.data.data);
+      load(); // refresh the table
+    } catch (err) {
+      setError(err.response?.data?.message || 'Upload failed');
+    } finally { setCsvUploading(false); }
+  }
+
   const pages = Math.ceil(total / LIMIT);
 
   return (
@@ -65,7 +114,10 @@ export default function Vehicles() {
           <h2>Registered Vehicles</h2>
           <p>Manage campus vehicle authorizations — {total} total registered</p>
         </div>
-        <button className="btn btn-primary" onClick={openAdd}><Plus /> Add Vehicle</button>
+        <div className="topbar-actions">
+          <button className="btn btn-secondary" onClick={openCsv}><Upload size={16} /> Import CSV</button>
+          <button className="btn btn-primary" onClick={openAdd}><Plus /> Add Vehicle</button>
+        </div>
       </div>
 
       <div className="card">
@@ -122,8 +174,8 @@ export default function Vehicles() {
         )}
       </div>
 
-      {/* Add / Edit Modal */}
-      {modal && (
+      {/* ── Add / Edit Modal ──────────────────────────────────────── */}
+      {(modal === 'add' || modal === 'edit') && (
         <div className="modal-overlay" onClick={() => setModal(null)}>
           <div className="modal" onClick={e => e.stopPropagation()}>
             <div className="modal-header">
@@ -170,11 +222,8 @@ export default function Vehicles() {
                 <div className="form-group">
                   <label className="form-label">Mobile No.</label>
                   <div className="phone-group">
-                    <select
-                      className="form-select phone-code-select"
-                      value={form.countryCode}
-                      onChange={e => setForm(f => ({ ...f, countryCode: e.target.value }))}
-                    >
+                    <select className="form-select phone-code-select" value={form.countryCode}
+                      onChange={e => setForm(f => ({ ...f, countryCode: e.target.value }))}>
                       {COUNTRY_CODES.map(c => (
                         <option key={c.code} value={c.code}>{c.flag} {c.code}</option>
                       ))}
@@ -206,7 +255,94 @@ export default function Vehicles() {
         </div>
       )}
 
-      {/* Delete confirm */}
+      {/* ── CSV Import Modal ──────────────────────────────────────── */}
+      {modal === 'csv' && (
+        <div className="modal-overlay" onClick={() => setModal(null)}>
+          <div className="modal modal-lg" onClick={e => e.stopPropagation()}>
+            <div className="modal-header">
+              <h2>Import Vehicles from CSV</h2>
+              <button className="modal-close" onClick={() => setModal(null)}>×</button>
+            </div>
+
+            {!csvResult ? (
+              <>
+                {/* Template download hint */}
+                <div className="csv-hint">
+                  <FileText size={14} />
+                  <span>Required columns: <code>name, fathersName, dept, dateOfIssue, vehicleType, stickerNo, vehicleNo, mobileNo</code></span>
+                  <button className="btn-link" onClick={downloadTemplate}><Download size={13} /> Download template</button>
+                </div>
+
+                {error && <div className="alert alert-error">{error}</div>}
+
+                {/* Drop zone */}
+                <div
+                  className={`csv-drop-zone ${csvDragging ? 'dragging' : ''} ${csvFile ? 'has-file' : ''}`}
+                  onDragOver={onDragOver}
+                  onDragLeave={onDragLeave}
+                  onDrop={onDrop}
+                  onClick={() => fileInputRef.current?.click()}
+                >
+                  <input ref={fileInputRef} type="file" accept=".csv" style={{ display: 'none' }}
+                    onChange={e => { if (e.target.files[0]) pickFile(e.target.files[0]); }} />
+                  {csvFile ? (
+                    <div className="csv-file-chosen">
+                      <FileText size={24} />
+                      <span className="csv-filename">{csvFile.name}</span>
+                      <span className="csv-filesize">({(csvFile.size / 1024).toFixed(1)} KB)</span>
+                    </div>
+                  ) : (
+                    <div className="csv-placeholder">
+                      <Upload size={28} />
+                      <p>Drag &amp; drop your CSV here, or <span className="csv-browse">browse</span></p>
+                      <p className="csv-hint-small">Only .csv files · Max 5 MB</p>
+                    </div>
+                  )}
+                </div>
+
+                <div className="form-actions">
+                  <button type="button" className="btn btn-secondary" onClick={() => setModal(null)}>Cancel</button>
+                  <button className="btn btn-primary" onClick={handleCsvUpload} disabled={!csvFile || csvUploading}>
+                    {csvUploading ? <><span className="spinner" /> Uploading…</> : <><Upload size={15} /> Upload &amp; Import</>}
+                  </button>
+                </div>
+              </>
+            ) : (
+              /* Result view */
+              <>
+                <div className="csv-result-summary">
+                  <div className="csv-stat green"><CheckCircle size={18} /><span><strong>{csvResult.inserted}</strong> inserted</span></div>
+                  <div className="csv-stat amber"><AlertCircle size={18} /><span><strong>{csvResult.skipped}</strong> skipped</span></div>
+                  <div className="csv-stat red"><XCircle size={18} /><span><strong>{csvResult.errors.length}</strong> errors</span></div>
+                </div>
+
+                {csvResult.errors.length > 0 && (
+                  <div className="csv-errors-wrap">
+                    <p className="csv-errors-title">Row-level errors:</p>
+                    <div className="table-wrap csv-error-table">
+                      <table>
+                        <thead><tr><th>Row</th><th>Reason</th></tr></thead>
+                        <tbody>
+                          {csvResult.errors.map((e, i) => (
+                            <tr key={i}><td className="cell-sm">#{e.row}</td><td>{e.reason}</td></tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                )}
+
+                <div className="form-actions">
+                  <button className="btn btn-secondary" onClick={openCsv}>Import Another File</button>
+                  <button className="btn btn-primary" onClick={() => setModal(null)}>Done</button>
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* ── Delete confirm ────────────────────────────────────────── */}
       {deleteId && (
         <div className="modal-overlay" onClick={() => setDeleteId(null)}>
           <div className="modal modal-sm" onClick={e => e.stopPropagation()}>

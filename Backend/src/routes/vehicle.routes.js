@@ -5,18 +5,21 @@ import {
     getVehicle,
     updateVehicle,
     deleteVehicle,
+    bulkImportVehicles,
 } from "../controllers/vehicle.controller.js";
 import verifyJWT from "../middlewares/auth.middleware.js";
+import { uploadCsv } from "../middlewares/upload.middleware.js";
 
 const router = Router();
 
 // All vehicle routes require authentication
 router.use(verifyJWT);
 
-router.post("/",              createVehicle);
-router.get("/",               getVehicles);
-router.get("/:vehicleNo",     getVehicle);
-router.put("/:vehicleNo",     updateVehicle);
-router.delete("/:vehicleNo",  deleteVehicle);
+router.post("/bulk", uploadCsv, bulkImportVehicles);
+router.post("/", createVehicle);
+router.get("/", getVehicles);
+router.get("/:vehicleNo", getVehicle);
+router.put("/:vehicleNo", updateVehicle);
+router.delete("/:vehicleNo", deleteVehicle);
 
 export default router;
