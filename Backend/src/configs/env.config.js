@@ -19,6 +19,7 @@ const requiredVars = [
   "RESEND_API_KEY",
   "EMAIL_FROM",
   "OTP_EXPIRY_MINUTES",
+  "EDGE_API_KEY",
 ];
 
 const missing = requiredVars.filter((key) => !process.env[key]);
@@ -53,6 +54,9 @@ const env = Object.freeze({
 
   // OTP
   otpExpiryMinutes: parseInt(process.env.OTP_EXPIRY_MINUTES, 10),
+
+  // Edge devices
+  edgeApiKey: process.env.EDGE_API_KEY,
 });
 
 export default env;

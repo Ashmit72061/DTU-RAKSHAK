@@ -25,12 +25,12 @@ import {
 export const processScan = asyncHandler(async (req, res) => {
     const { camera_id, vehicle_no, timestamp, confidence, raw_plate } = req.body;
 
-    if (!camera_id)  throw new ApiError(StatusCodes.BAD_REQUEST, "camera_id is required");
+    if (!camera_id) throw new ApiError(StatusCodes.BAD_REQUEST, "camera_id is required");
     if (!vehicle_no) throw new ApiError(StatusCodes.BAD_REQUEST, "vehicle_no is required");
 
     const vehicleNo = normalisePlate(vehicle_no);
-    const rawPlate  = raw_plate || vehicleNo;
-    const scanTime  = timestamp ? new Date(timestamp) : new Date();
+    const rawPlate = raw_plate || vehicleNo;
+    const scanTime = timestamp ? new Date(timestamp) : new Date();
     const confScore = confidence ? parseFloat(confidence) : null;
 
     // 1. Verify camera exists
@@ -38,17 +38,17 @@ export const processScan = asyncHandler(async (req, res) => {
     if (!camera) throw new ApiError(StatusCodes.NOT_FOUND, `Camera not found: ${camera_id}`);
 
     // 2. Resolve vehicle auth (Redis → DB)
-    const authInfo     = await resolveVehicle(vehicleNo);
+    const authInfo = await resolveVehicle(vehicleNo);
     const isAuthorized = authInfo.isAuthorized;
 
-    const ctx = { res, camera, vehicleNo, rawPlate, confScore, isAuthorized, authInfo, scanTime, camera_id };
+    const ctx = { res, camera, vehicleNo, vehicleId: authInfo.vehicleId ?? null, rawPlate, confScore, isAuthorized, authInfo, scanTime, camera_id };
 
     // 3. INTERIOR camera → sighting only, no gate logic
     if (camera.cameraType === "INTERIOR") return handleSighting(ctx);
 
     // 4. Gate camera — check active session
-    const activeKey     = KEY_ACTIVE(vehicleNo);
-    const activeRaw     = await redis.get(activeKey);
+    const activeKey = KEY_ACTIVE(vehicleNo);
+    const activeRaw = await redis.get(activeKey);
     const activeSession = activeRaw ? JSON.parse(activeRaw) : null;
 
     // 4a. Authorized vehicle
@@ -59,18 +59,18 @@ export const processScan = asyncHandler(async (req, res) => {
     }
 
     // 4b. Unauthorized vehicle
-    const unauthKey  = KEY_UNAUTH(vehicleNo);
+    const unauthKey = KEY_UNAUTH(vehicleNo);
     const unauthData = await redis.get(unauthKey);
 
-    if (unauthData)                    return handleUnauthRescan({ ...ctx, unauthData, unauthKey, activeKey });
+    if (unauthData) return handleUnauthRescan({ ...ctx, unauthData, unauthKey, activeKey });
     if (!unauthData && !activeSession) return handleUnauthEntry({ ...ctx, unauthKey, activeKey });
 
     // Fallback — edge case: unauth vehicle with stale activeSession but no unauthKey
     return res.status(StatusCodes.OK).json(new ApiResponse(StatusCodes.OK, {
         vehicleNo,
-        isAuthorized:    false,
+        isAuthorized: false,
         vehicleCategory: "UNVERIFIED",
-        message:         "⚠️ Unverified vehicle — no active session found.",
+        message: "⚠️ Unverified vehicle — no active session found.",
     }, "Unverified vehicle, no session"));
 });
 
@@ -83,12 +83,12 @@ export const getLogs = asyncHandler(async (req, res) => {
 
     const where = {};
     if (authorized !== undefined) where.isAuthorized = authorized === "true";
-    if (cameraId)                 where.cameraId     = cameraId;
-    if (logType)                  where.logType      = logType.toUpperCase();
+    if (cameraId) where.cameraId = cameraId;
+    if (logType) where.logType = logType.toUpperCase();
     if (from || to) {
         where.entryTime = {};
         if (from) where.entryTime.gte = new Date(from);
-        if (to)   where.entryTime.lte = new Date(to);
+        if (to) where.entryTime.lte = new Date(to);
     }
 
     const [logs, total] = await Promise.all([
@@ -106,7 +106,7 @@ export const getLogs = asyncHandler(async (req, res) => {
 //  Vehicles currently on campus (no exit logged yet)
 export const getActiveLogs = asyncHandler(async (req, res) => {
     const logs = await prisma.entryExitLog.findMany({
-        where:   { exitTime: null, logType: "ENTRY" },
+        where: { exitTime: null, logType: "ENTRY" },
         orderBy: { entryTime: "desc" },
         include: { camera: true, vehicle: true },
     });
@@ -140,7 +140,7 @@ export const getLogsByVehicle = asyncHandler(async (req, res) => {
     if (from || to) {
         where.entryTime = {};
         if (from) where.entryTime.gte = new Date(from);
-        if (to)   where.entryTime.lte = new Date(to);
+        if (to) where.entryTime.lte = new Date(to);
     }
 
     const [logs, activeRaw, unauthData] = await Promise.all([
@@ -151,9 +151,9 @@ export const getLogsByVehicle = asyncHandler(async (req, res) => {
 
     return res.status(StatusCodes.OK).json(new ApiResponse(StatusCodes.OK, {
         vehicleNo,
-        count:             logs.length,
+        count: logs.length,
         logs,
         currentlyOnCampus: !!activeRaw,
-        unauthStatus:      unauthData ? JSON.parse(unauthData) : null,
+        unauthStatus: unauthData ? JSON.parse(unauthData) : null,
     }, "Vehicle logs fetched"));
 });
