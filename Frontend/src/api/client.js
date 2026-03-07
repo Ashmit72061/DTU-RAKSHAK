@@ -12,7 +12,7 @@ import axios from 'axios';
 import { attachAuthInterceptors } from './interceptors';
 
 // ── Constants ──────────────────────────────────────────────────
-const BASE_URL = '/api/v1';
+const BASE_URL = import.meta.env.VITE_API_BASE_URL ?? '/api/v1';
 const TOKEN_KEY = 'accessToken';
 const REFRESH_URL = '/auth/refresh-token';
 const LOGIN_PATH = '/login';
