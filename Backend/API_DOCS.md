@@ -38,6 +38,7 @@
 |--------|----------|-------|
 | GET | `/vehicles?search=DL&page=1&limit=15` | Paginated list |
 | POST | `/vehicles` | Create registered vehicle |
+| POST | `/vehicles/bulk` | Bulk import from CSV |
 | GET | `/vehicles/:vehicleNo` | Single vehicle + its logs |
 | PUT | `/vehicles/:vehicleNo` | Update vehicle |
 | DELETE | `/vehicles/:vehicleNo` | Delete vehicle |
@@ -57,6 +58,25 @@
 ```
 > `vehicleType`: `"2W"` | `"4W"` | `"Heavy"` | `"Electric"`
 
+**POST `/vehicles/bulk` — CSV import:**
+
+- **Content-Type:** `multipart/form-data`
+- **Field:** `file` — a `.csv` file (max 5 MB)
+- **CSV columns (first row = header):** `name`, `fathersName`, `dept`, `dateOfIssue` (YYYY-MM-DD), `vehicleType`, `stickerNo`, `vehicleNo`, `mobileNo`
+- Rows with missing / invalid fields are collected in `errors[]` and skipped; valid rows are inserted with DB-level duplicate skipping.
+
+```json
+// Response data shape
+{
+  "inserted": 42,
+  "skipped": 3,
+  "errors": [
+    { "row": 5, "reason": "Missing required fields: stickerNo" },
+    { "row": 9, "reason": "Invalid vehicleType \"bike\" — must be one of: 2W, 4W, Heavy, Electric" }
+  ]
+}
+```
+
 ---
 
 ## 🔒 Cameras — `/api/v1/cameras`
@@ -65,6 +85,7 @@
 |--------|----------|-------|
 | GET | `/cameras` | All cameras |
 | POST | `/cameras` | Create camera |
+| POST | `/cameras/bulk` | Bulk import from CSV |
 | GET | `/cameras/:id` | Single camera |
 | PUT | `/cameras/:id` | Update camera |
 | DELETE | `/cameras/:id` | Delete camera |
@@ -80,11 +101,31 @@
 ```
 > `cameraType`: `"ENTRY"` | `"EXIT"` | `"BOTH"` | `"INTERIOR"`
 
+**POST `/cameras/bulk` — CSV import:**
+
+- **Content-Type:** `multipart/form-data`
+- **Field:** `file` — a `.csv` file (max 5 MB)
+- **CSV columns (first row = header):** `lat`, `long`, `cameraType`, `cameraLocation`
+- `lat` / `long` must be valid numbers; `cameraType` must be one of the enum values above.
+
+```json
+// Response data shape
+{
+  "inserted": 5,
+  "skipped": 0,
+  "errors": [
+    { "row": 3, "reason": "Invalid cameraType \"outdoor\" — must be one of: ENTRY, EXIT, BOTH, INTERIOR" }
+  ]
+}
+```
+
 ---
 
 ## 🔒 Scan — `/api/v1/scan`
 
 ### POST `/scan` — Process hardware JSON
+
+> **Auth:** `X-Edge-Api-Key: <secret>` header — **NOT** a user JWT. Edge devices (YOLO + Flask cameras) use a shared long-lived API key stored in the `EDGE_API_KEY` env var.
 
 Accepts the JSON payload sent by camera hardware. No image upload needed.
 
