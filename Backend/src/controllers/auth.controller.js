@@ -237,3 +237,108 @@ export const logout = asyncHandler(async (req, res) => {
             new ApiResponse(StatusCodes.OK, null, "Logged out successfully")
         );
 });
+
+
+// ────────────────────────────────────────────────────────────────
+// POST /api/v1/auth/forgot-password
+// ────────────────────────────────────────────────────────────────
+
+export const forgotPassword = asyncHandler(async (req, res) => {
+    const email = req.body.email?.trim().toLowerCase();
+
+    if (!email) {
+        throw new ApiError(StatusCodes.BAD_REQUEST, "Email is required");
+    }
+
+    const user = await prisma.user.findUnique({ where: { email } });
+
+    // Always return 200 to prevent email enumeration attacks
+    if (!user || !user.isVerified) {
+        return res.status(StatusCodes.OK).json(
+            new ApiResponse(StatusCodes.OK, { email }, "If this email is registered, an OTP will be sent.")
+        );
+    }
+
+    const otp = await generateOtp(email, "FORGOT_PASSWORD");
+    await sendOtpEmail(email, otp, "FORGOT_PASSWORD");
+
+    return res.status(StatusCodes.OK).json(
+        new ApiResponse(StatusCodes.OK, { email }, "OTP sent to your email. Please verify to reset your password.")
+    );
+});
+
+// ────────────────────────────────────────────────────────────────
+// POST /api/v1/auth/forgot-password/verify-otp
+// ────────────────────────────────────────────────────────────────
+
+export const verifyForgotPasswordOtp = asyncHandler(async (req, res) => {
+    const { otp, newPassword } = req.body;
+    const email = req.body.email?.trim().toLowerCase();
+
+    if (!email || !otp || !newPassword) {
+        throw new ApiError(StatusCodes.BAD_REQUEST, "Email, OTP, and new password are required");
+    }
+
+    const isValid = await verifyOtp(email, otp, "FORGOT_PASSWORD");
+
+    if (!isValid) {
+        throw new ApiError(StatusCodes.UNAUTHORIZED, "Invalid or expired OTP");
+    }
+
+    const hashedPassword = await bcrypt.hash(newPassword, SALT_ROUNDS);
+
+    await prisma.user.update({
+        where: { email },
+        data: {
+            password: hashedPassword,
+            refreshToken: null, // invalidate all active sessions
+        },
+    });
+
+    return res.status(StatusCodes.OK).json(
+        new ApiResponse(StatusCodes.OK, null, "Password reset successfully. Please sign in again.")
+    );
+});
+
+// ────────────────────────────────────────────────────────────────
+// POST /api/v1/auth/update-password  (protected)
+// ────────────────────────────────────────────────────────────────
+
+export const updatePassword = asyncHandler(async (req, res) => {
+    const { currentPassword, newPassword } = req.body;
+
+    if (!currentPassword || !newPassword) {
+        throw new ApiError(StatusCodes.BAD_REQUEST, "Current password and new password are required");
+    }
+
+    if (currentPassword === newPassword) {
+        throw new ApiError(StatusCodes.BAD_REQUEST, "New password must differ from the current password");
+    }
+
+    // Fetch full user record (req.user from verifyJWT omits password)
+    const user = await prisma.user.findUnique({ where: { id: req.user.id } });
+
+    const isPasswordValid = await bcrypt.compare(currentPassword, user.password);
+
+    if (!isPasswordValid) {
+        throw new ApiError(StatusCodes.UNAUTHORIZED, "Current password is incorrect");
+    }
+
+    const hashedPassword = await bcrypt.hash(newPassword, SALT_ROUNDS);
+
+    await prisma.user.update({
+        where: { id: user.id },
+        data: {
+            password: hashedPassword,
+            refreshToken: null, // invalidate other active sessions
+        },
+    });
+
+    // Clear the refresh token cookie on the current session too
+    return res
+        .status(StatusCodes.OK)
+        .clearCookie("refresh_token", COOKIE_OPTIONS)
+        .json(
+            new ApiResponse(StatusCodes.OK, null, "Password updated successfully. Please sign in again.")
+        );
+});

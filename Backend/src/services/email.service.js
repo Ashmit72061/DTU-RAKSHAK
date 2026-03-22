@@ -91,21 +91,36 @@ if (!activeProvider) {
  * @param {"SIGNUP"|"SIGNIN"} type
  * @returns {string} HTML string
  */
-const buildOtpHtml = (otp, type) => `
-  <div style="font-family: 'Segoe UI', Arial, sans-serif; max-width: 480px; margin: 0 auto; padding: 32px;">
-    <h2 style="color: #1a1a2e; margin-bottom: 16px;">
-      ${type === "SIGNUP" ? "Welcome! Verify your email" : "Sign-in verification"}
-    </h2>
-    <p style="color: #555; font-size: 15px; line-height: 1.6;">
-      Use the following OTP to ${type === "SIGNUP" ? "complete your registration" : "sign in to your account"}.
-      This code expires in <strong>${env.otpExpiryMinutes} minute${env.otpExpiryMinutes > 1 ? "s" : ""}</strong>.
-    </p>
-    <div style="background: #f4f4f8; border-radius: 8px; padding: 20px; text-align: center; margin: 24px 0;">
-      <span style="font-size: 32px; font-weight: 700; letter-spacing: 8px; color: #1a1a2e;">${otp}</span>
+const buildOtpHtml = (otp, type) => {
+  const content = {
+    SIGNUP: {
+      heading: "Welcome! Verify your email",
+      body: "Use the following OTP to complete your registration.",
+    },
+    SIGNIN: {
+      heading: "Sign-in verification",
+      body: "Use the following OTP to sign in to your account.",
+    },
+    FORGOT_PASSWORD: {
+      heading: "Reset your password",
+      body: "Use the following OTP to reset your password. If you did not request a password reset, please secure your account immediately.",
+    },
+  }[type];
+
+  return `
+    <div style="font-family: 'Segoe UI', Arial, sans-serif; max-width: 480px; margin: 0 auto; padding: 32px;">
+      <h2 style="color: #1a1a2e; margin-bottom: 16px;">${content.heading}</h2>
+      <p style="color: #555; font-size: 15px; line-height: 1.6;">
+        ${content.body}
+        This code expires in <strong>${env.otpExpiryMinutes} minute${env.otpExpiryMinutes > 1 ? "s" : ""}</strong>.
+      </p>
+      <div style="background: #f4f4f8; border-radius: 8px; padding: 20px; text-align: center; margin: 24px 0;">
+        <span style="font-size: 32px; font-weight: 700; letter-spacing: 8px; color: #1a1a2e;">${otp}</span>
+      </div>
+      <p style="color: #999; font-size: 13px;">If you did not request this, please ignore this email.</p>
     </div>
-    <p style="color: #999; font-size: 13px;">If you did not request this, please ignore this email.</p>
-  </div>
-`;
+  `;
+};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Public API  (identical signature to the old email.service.js — zero breaking changes)
@@ -119,14 +134,15 @@ const buildOtpHtml = (otp, type) => `
  * @param {"SIGNUP"|"SIGNIN"} type       - Purpose of the OTP (controls subject and copy)
  */
 export const sendOtpEmail = async (to, otp, type) => {
-  const subject =
-    type === "SIGNUP"
-      ? "Verify your email — Signup OTP"
-      : "Sign-in verification — OTP";
+  const subject = {
+    SIGNUP:           "Verify your email — Signup OTP",
+    SIGNIN:           "Sign-in verification — OTP",
+    FORGOT_PASSWORD:  "Password reset — OTP",
+  }[type];
 
-  await activeProvider.sendEmail({
-    to,
-    subject,
-    html: buildOtpHtml(otp, type),
-  });
+  if (!subject) {
+    throw new Error(`Unknown OTP type: "${type}"`);
+  }
+
+  await activeProvider.sendEmail({ to, subject, html: buildOtpHtml(otp, type) });
 };
