@@ -2,21 +2,25 @@ import { StatusCodes } from "http-status-codes";
 import prisma from "../models/prisma.js";
 import redis from "../models/redis.js";
 import ApiResponse from "../utils/ApiResponse.js";
+import { hashField, normalizeVehicleNo, decryptVehicle } from "../utils/crypto.util.js";
 
 // ── Redis key helpers 
 export const KEY_VEHICLE = (plate) => `vehicle:${plate}`;   // auth cache  (24h)
-export const KEY_ACTIVE = (plate) => `active:${plate}`;    // current entry session
-export const KEY_UNAUTH = (plate) => `unauth:${plate}`;    // 30-min unauth window
-export const UNAUTH_TTL = 30 * 60;                         // 30 minutes in seconds
+export const KEY_ACTIVE  = (plate) => `active:${plate}`;    // current entry session
+export const KEY_UNAUTH  = (plate) => `unauth:${plate}`;    // 30-min unauth window
+export const UNAUTH_TTL  = 30 * 60;                         // 30 minutes in seconds
 export const VEHICLE_TTL = 24 * 60 * 60;                    // 24 hours in seconds
 
 // ── Vehicle auth: Redis → DB 
+// Lookup by vehicleNoHash (plate is encrypted in DB; hash is the only way to find it)
 export async function resolveVehicle(vehicleNo) {
     const cacheKey = KEY_VEHICLE(vehicleNo);
-    const cached = await redis.get(cacheKey);
+    const cached   = await redis.get(cacheKey);
     if (cached) return JSON.parse(cached);
 
-    const dbVehicle = await prisma.vehicle.findUnique({ where: { vehicleNo } });
+    const vehicleNoHash = hashField(vehicleNo); // vehicleNo is already normalised by caller
+    const dbVehicle     = await prisma.vehicle.findUnique({ where: { vehicleNoHash } });
+
     const payload = dbVehicle
         ? { isAuthorized: true, vehicleId: dbVehicle.id, name: dbVehicle.name, dept: dbVehicle.dept, vehicleType: dbVehicle.vehicleType }
         : { isAuthorized: false, vehicleId: null };
@@ -27,16 +31,20 @@ export async function resolveVehicle(vehicleNo) {
 
 // ── Shared internal helpers 
 
-/** Common fields for every EntryExitLog create */
+/**
+ * Common fields for every EntryExitLog create.
+ * vehicleNoHash is stored alongside the raw plate for filtered queries / history lookup.
+ */
 const buildBaseLogData = ({ cameraId, vehicleNo, vehicleId, rawPlate, confScore, isAuthorized, scanTime }) => ({
     cameraId,
     vehicleNo,
-    vehicleId: vehicleId ?? null,       // FK to vehicles.id — null for unregistered
+    vehicleNoHash: hashField(vehicleNo), // vehicleNo is already normalised at this point
+    vehicleId:     vehicleId ?? null,
     rawPlate,
-    confidence: confScore,
+    confidence:    confScore,
     isAuthorized,
     vehicleCategory: isAuthorized ? "REGISTERED" : "UNVERIFIED",
-    entryTime: scanTime,
+    entryTime:     scanTime,
 });
 
 /** Delete both Redis keys for an unauth session in parallel */
@@ -45,10 +53,21 @@ const clearUnauthSession = (unauthKey, activeKey) =>
 
 /** Compact camera shape used in every response */
 const cameraInfo = (camera, includeType = false) => ({
-    id: camera.id,
+    id:       camera.id,
     location: camera.cameraLocation,
     ...(includeType && { type: camera.cameraType }),
 });
+
+/**
+ * Strip mobileNo from scan-response vehicle objects.
+ * Scan endpoints don't need phone numbers — avoid unnecessary decryption.
+ */
+const safeScanVehicle = (vehicle) => {
+    if (!vehicle) return null;
+    const decrypted = decryptVehicle(vehicle);
+    const { mobileNo, ...rest } = decrypted;
+    return rest;
+};
 
 //  INTERIOR camera → log a SIGHTING only, no entry/exit gate logic
 export async function handleSighting({ res, camera, vehicleNo, vehicleId, rawPlate, confScore, isAuthorized, authInfo, scanTime, camera_id }) {
@@ -58,12 +77,12 @@ export async function handleSighting({ res, camera, vehicleNo, vehicleId, rawPla
     });
 
     return res.status(StatusCodes.OK).json(new ApiResponse(StatusCodes.OK, {
-        event: "SIGHTING",
+        event:       "SIGHTING",
         vehicleNo,
         isAuthorized,
         vehicleInfo: isAuthorized ? authInfo : null,
-        camera: cameraInfo(camera, true),
-        log,
+        camera:      cameraInfo(camera, true),
+        log:         { ...log, vehicle: safeScanVehicle(log.vehicle) },
     }, `Vehicle ${vehicleNo} sighted at ${camera.cameraLocation}`));
 }
 
@@ -78,13 +97,13 @@ export async function handleAuthEntry({ res, camera, vehicleNo, vehicleId, rawPl
     await redis.setex(activeKey, VEHICLE_TTL, JSON.stringify({ logId: log.id, entryTime: scanTime.toISOString() }));
 
     return res.status(StatusCodes.OK).json(new ApiResponse(StatusCodes.OK, {
-        event: "ENTRY",
+        event:       "ENTRY",
         vehicleNo,
         isAuthorized: true,
         vehicleInfo: authInfo,
-        message: "✅ Entry granted — registered vehicle",
-        camera: cameraInfo(camera),
-        log,
+        message:     "✅ Entry granted — registered vehicle",
+        camera:      cameraInfo(camera),
+        log:         { ...log, vehicle: safeScanVehicle(log.vehicle) },
     }, "Entry granted"));
 }
 
@@ -98,8 +117,9 @@ export async function handleAuthExit({ res, camera, vehicleNo, authInfo, scanTim
 
     // DB fallback if Redis was flushed mid-session
     if (!logId || !entryTime) {
+        const vehicleNoHash = hashField(vehicleNo);
         const fallback = await prisma.entryExitLog.findFirst({
-            where: { vehicleNo, logType: "ENTRY", exitTime: null },
+            where:   { vehicleNoHash, logType: "ENTRY", exitTime: null },
             orderBy: { entryTime: "desc" },
         });
         if (fallback) { logId = fallback.id; entryTime = fallback.entryTime; }
@@ -108,22 +128,22 @@ export async function handleAuthExit({ res, camera, vehicleNo, authInfo, scanTim
     const duration = entryTime ? Math.round((exitTime - entryTime) / 1000) : null;
 
     const log = await prisma.entryExitLog.update({
-        where: { id: logId },
-        data: { logType: "EXIT", exitTime, vehicleDuration: duration, cameraId: camera_id },
+        where:   { id: logId },
+        data:    { logType: "EXIT", exitTime, vehicleDuration: duration, cameraId: camera_id },
         include: { camera: true, vehicle: true },
     });
 
     await redis.del(activeKey);
 
     return res.status(StatusCodes.OK).json(new ApiResponse(StatusCodes.OK, {
-        event: "EXIT",
+        event:           "EXIT",
         vehicleNo,
-        isAuthorized: true,
-        vehicleInfo: authInfo,
+        isAuthorized:    true,
+        vehicleInfo:     authInfo,
         vehicleDuration: duration,
-        message: "👋 Exit recorded — registered vehicle",
-        camera: cameraInfo(camera),
-        log,
+        message:         "👋 Exit recorded — registered vehicle",
+        camera:          cameraInfo(camera),
+        log:             { ...log, vehicle: safeScanVehicle(log.vehicle) },
     }, "Exit recorded"));
 }
 
@@ -139,13 +159,13 @@ export async function handleUnauthEntry({ res, camera, vehicleNo, rawPlate, conf
     await redis.setex(activeKey, UNAUTH_TTL, JSON.stringify({ logId: log.id, entryTime: scanTime.toISOString() }));
 
     return res.status(StatusCodes.OK).json(new ApiResponse(StatusCodes.OK, {
-        event: "ENTRY",
+        event:           "ENTRY",
         vehicleNo,
-        isAuthorized: false,
+        isAuthorized:    false,
         vehicleCategory: "UNVERIFIED",
-        message: "⚠️ Unverified vehicle — allowed. 30-minute stay limit applies.",
+        message:         "⚠️ Unverified vehicle — allowed. 30-minute stay limit applies.",
         allowedUntil,
-        camera: cameraInfo(camera),
+        camera:          cameraInfo(camera),
         log,
     }, "Unverified vehicle entry — 30-min limit"));
 }
@@ -161,20 +181,20 @@ export async function handleUnauthRescan({ res, camera, vehicleNo, scanTime, una
     // Close the log and clear Redis — same for both overstay and normal exit
     await prisma.entryExitLog.update({
         where: { id: logId },
-        data: { logType: "EXIT", exitTime, vehicleDuration: duration },
+        data:  { logType: "EXIT", exitTime, vehicleDuration: duration },
     });
     await clearUnauthSession(unauthKey, activeKey);
 
     if (isOverdue) {
         return res.status(StatusCodes.OK).json(new ApiResponse(StatusCodes.OK, {
-            event: "OVERSTAY_EXIT",
+            event:           "OVERSTAY_EXIT",
             vehicleNo,
-            isAuthorized: false,
+            isAuthorized:    false,
             vehicleCategory: "UNVERIFIED",
-            message: "🚨 ALERT: Unverified vehicle overstayed 30-minute limit!",
+            message:         "🚨 ALERT: Unverified vehicle overstayed 30-minute limit!",
             allowedUntil,
             vehicleDuration: duration,
-            camera: cameraInfo(camera),
+            camera:          cameraInfo(camera),
         }, "⚠️ Unverified vehicle overstay alert"));
     }
 
@@ -182,14 +202,14 @@ export async function handleUnauthRescan({ res, camera, vehicleNo, scanTime, una
     const log = await prisma.entryExitLog.findUnique({ where: { id: logId }, include: { camera: true, vehicle: true } });
 
     return res.status(StatusCodes.OK).json(new ApiResponse(StatusCodes.OK, {
-        event: "EXIT",
+        event:           "EXIT",
         vehicleNo,
-        isAuthorized: false,
+        isAuthorized:    false,
         vehicleCategory: "UNVERIFIED",
-        message: "👋 Unverified vehicle exited within allowed window.",
+        message:         "👋 Unverified vehicle exited within allowed window.",
         vehicleDuration: duration,
         allowedUntil,
-        camera: cameraInfo(camera),
-        log,
+        camera:          cameraInfo(camera),
+        log:             { ...log, vehicle: safeScanVehicle(log.vehicle) },
     }, "Unverified vehicle exit"));
 }

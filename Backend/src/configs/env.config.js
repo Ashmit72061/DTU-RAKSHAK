@@ -1,4 +1,5 @@
 import "dotenv/config";
+import crypto from "node:crypto";
 
 /**
  * Centralised environment configuration.
@@ -25,6 +26,7 @@ const requiredVars = [
   "EMAIL_FROM",
   "OTP_EXPIRY_MINUTES",
   "EDGE_API_KEY",
+  "ENCRYPTION_KEY",
 ];
 
 const missing = requiredVars.filter((key) => !process.env[key]);
@@ -92,6 +94,15 @@ const env = Object.freeze({
 
   // Edge devices
   edgeApiKey: process.env.EDGE_API_KEY,
+
+  // AES-256-GCM field encryption (base64-encoded 32-byte key)
+  encryptionKey: process.env.ENCRYPTION_KEY,
 });
+
+// Validate encryption key length at startup — crash early rather than silently misencrypt
+const _keyCheck = Buffer.from(process.env.ENCRYPTION_KEY, "base64");
+if (_keyCheck.length !== 32) {
+  throw new Error(`❌ ENCRYPTION_KEY must decode to exactly 32 bytes (got ${_keyCheck.length})`);
+}
 
 export default env;
