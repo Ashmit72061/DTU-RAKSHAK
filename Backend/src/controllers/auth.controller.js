@@ -342,3 +342,43 @@ export const updatePassword = asyncHandler(async (req, res) => {
             new ApiResponse(StatusCodes.OK, null, "Password updated successfully. Please sign in again.")
         );
 });
+
+// ────────────────────────────────────────────────────────────────
+// POST /api/v1/auth/resend-otp
+// Body: { email, type }  where type is "SIGNUP" | "SIGNIN" | "FORGOT_PASSWORD"
+// ────────────────────────────────────────────────────────────────
+
+export const resendOtp = asyncHandler(async (req, res) => {
+    const { type } = req.body;
+    const email = req.body.email?.trim().toLowerCase();
+
+    if (!email || !type) {
+        throw new ApiError(StatusCodes.BAD_REQUEST, "Email and type are required");
+    }
+
+    if (!["SIGNUP", "SIGNIN", "FORGOT_PASSWORD"].includes(type)) {
+        throw new ApiError(StatusCodes.BAD_REQUEST, "Invalid OTP type");
+    }
+
+    const user = await prisma.user.findUnique({ where: { email } });
+
+    if (!user) {
+        // Return 200 to prevent email enumeration (same pattern as forgotPassword)
+        return res.status(StatusCodes.OK).json(
+            new ApiResponse(StatusCodes.OK, { email }, "If this email is registered, a new OTP will be sent.")
+        );
+    }
+
+    // For SIGNIN resend, the user must already be verified
+    if (type === "SIGNIN" && !user.isVerified) {
+        throw new ApiError(StatusCodes.FORBIDDEN, "Account not verified. Please complete signup first.");
+    }
+
+    // generateOtp overwrites any existing Redis key with a fresh TTL
+    const otp = await generateOtp(email, type);
+    await sendOtpEmail(email, otp, type);
+
+    return res.status(StatusCodes.OK).json(
+        new ApiResponse(StatusCodes.OK, { email }, "OTP resent successfully. Please check your email.")
+    );
+});
