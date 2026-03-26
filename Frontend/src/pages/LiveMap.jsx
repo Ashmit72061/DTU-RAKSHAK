@@ -1,9 +1,8 @@
 import React, { useEffect, useState, useCallback, useRef } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { GoogleMap, useJsApiLoader, Polygon } from '@react-google-maps/api';
-import { Search } from 'lucide-react';
 import PathRenderer from '../components/PathRenderer';
-import { getEntryPath, getVehicleLogs } from '../api';
+import { getEntryPath } from '../api';
 import GeoJSON from '../assets/dtu_boundary.geojson?url';
 
 const mapContainerStyle = {
@@ -59,9 +58,6 @@ export default function LiveMap() {
   const [loadingPath, setLoadingPath] = useState(false);
   const [campusInnerCoords, setCampusInnerCoords] = useState([]);
   
-  const [searchQuery, setSearchQuery] = useState('');
-  const [searchResultMsg, setSearchResultMsg] = useState('');
-  
   const mapRef = useRef(null);
   
   const onLoad = useCallback(function callback(map) {
@@ -95,12 +91,10 @@ export default function LiveMap() {
   const fetchPath = async (entryId) => {
     try {
       setLoadingPath(true);
-      setSearchResultMsg('');
       const res = await getEntryPath(entryId);
       setPathData(res.data.data.path || []);
     } catch (err) {
       console.error(err);
-      setSearchResultMsg('Path not found');
       setPathData([]);
     } finally {
       setLoadingPath(false);
@@ -113,122 +107,104 @@ export default function LiveMap() {
     }
   }, [entryIdFromUrl]);
 
-  const handleSearch = async (e) => {
-    e.preventDefault();
-    if (!searchQuery.trim()) return;
-
-    try {
-      setLoadingPath(true);
-      setSearchResultMsg('Searching...');
-      
-      const res = await getVehicleLogs(searchQuery.toUpperCase());
-      const logs = res.data.data.logs;
-      if (logs && logs.length > 0) {
-        // Find most recent active log or just the most recent log
-        const activeLog = logs.find(l => !l.exitTime) || logs[0];
-        setSearchResultMsg(`Found path for ${activeLog.vehicleNo}`);
-        fetchPath(activeLog.id);
-      } else {
-        setSearchResultMsg('Vehicle not found');
-        setPathData([]);
-      }
-    } catch {
-      setSearchResultMsg('Vehicle not found');
-      setPathData([]);
-    } finally {
-      setLoadingPath(false);
-    }
-  };
-
   if (loadError) return <div className="main">Error loading Google Maps</div>;
   if (!isLoaded) return <div className="main">Loading Map...</div>;
 
   return (
-    <div className="main" style={{ padding: 0, position: 'relative', height: '100vh' }}>
-      <GoogleMap
-        mapContainerStyle={mapContainerStyle}
-        center={defaultCenter}
-        zoom={16}
-        options={options}
-        onLoad={onLoad}
-        onUnmount={onUnmount}
-      >
-        {/* Inverted Mask Polygon */}
-        {campusInnerCoords.length > 0 && window.google && (
-          <Polygon
-            paths={[worldOuterCoords, campusInnerCoords]}
-            options={{
-              fillColor: '#ffffff',
-              fillOpacity: 1, // Completely block
-              strokeColor: 'transparent', // No outline
-              strokeWeight: 0,
-              strokeOpacity: 0,
-              clickable: false,
-            }}
-          />
-        )}
-        
-        {pathData.length > 0 && <PathRenderer path={pathData} mapInstance={mapRef.current} />}
-      </GoogleMap>
-      
-      {/* Floating Search Bar mimicking Maps */}
-      <div style={floatingSearchStyle}>
-        <form onSubmit={handleSearch} style={{ display: 'flex', alignItems: 'center', width: '100%' }}>
-          <button type="submit" style={searchBtnStyle}>
-            <Search size={20} color="#5f6368" />
-          </button>
-          <input 
-            type="text" 
-            placeholder="Search vehicle plate number" 
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            style={searchInputStyle}
-          />
-        </form>
-        {searchResultMsg && (
-          <div style={{ padding: '8px 16px', fontSize: '13px', color: '#5f6368', borderTop: '1px solid #e8eaed' }}>
-            {searchResultMsg}
+    <div className="main" style={{ display: 'flex', flexDirection: 'column', height: '100vh', backgroundColor: '#f3f4f6' }}>
+      <div style={{ position: 'relative', height: '60vh', flexShrink: 0 }}>
+        <GoogleMap
+          mapContainerStyle={mapContainerStyle}
+          center={defaultCenter}
+          zoom={16}
+          options={options}
+          onLoad={onLoad}
+          onUnmount={onUnmount}
+        >
+          {/* Inverted Mask Polygon */}
+          {campusInnerCoords.length > 0 && window.google && (
+            <Polygon
+              paths={[worldOuterCoords, campusInnerCoords]}
+              options={{
+                fillColor: '#ffffff',
+                fillOpacity: 1, // Completely block
+                strokeColor: 'transparent', // No outline
+                strokeWeight: 0,
+                strokeOpacity: 0,
+                clickable: false,
+              }}
+            />
+          )}
+          
+          {pathData.length > 0 && <PathRenderer path={pathData} mapInstance={mapRef.current} />}
+        </GoogleMap>
+      </div>
+
+      <div style={{ flex: 1, padding: '24px', overflowY: 'auto' }}>
+        <div style={{ maxWidth: '1200px', margin: '0 auto', backgroundColor: '#fff', borderRadius: '12px', boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1)', overflow: 'hidden' }}>
+          <div style={{ padding: '20px', borderBottom: '1px solid #e5e7eb' }}>
+            <h2 style={{ margin: 0, fontSize: '18px', fontWeight: '600', color: '#111827' }}>Vehicle Sightings Timeline</h2>
+            <p style={{ margin: '4px 0 0 0', fontSize: '14px', color: '#6b7280' }}>Chronological order of camera detections</p>
           </div>
-        )}
-        {loadingPath && (
-          <div style={{ padding: '8px 16px', fontSize: '13px', color: '#1a73e8', borderTop: '1px solid #e8eaed' }}>
-            Loading Path...
+          <div style={{ overflowX: 'auto' }}>
+            <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left' }}>
+              <thead style={{ backgroundColor: '#f9fafb' }}>
+                <tr>
+                  <th style={thStyle}>Order</th>
+                  <th style={thStyle}>Camera Location</th>
+                  <th style={thStyle}>Camera ID</th>
+                  <th style={thStyle}>Timestamp</th>
+                </tr>
+              </thead>
+              <tbody style={{ borderTop: '1px solid #e5e7eb' }}>
+                {pathData.map((point, index) => (
+                  <tr key={index} style={{ borderBottom: '1px solid #e5e7eb', backgroundColor: index % 2 === 0 ? '#ffffff' : '#f9fafb' }}>
+                    <td style={tdStyle}>
+                      <span style={{ 
+                        display: 'inline-flex', alignItems: 'center', justifyContent: 'center', 
+                        width: '28px', height: '28px', borderRadius: '50%', 
+                        backgroundColor: '#eff6ff', color: '#1d4ed8', 
+                        fontSize: '13px', fontWeight: '600' 
+                      }}>
+                        {index + 1}
+                      </span>
+                    </td>
+                    <td style={{...tdStyle, fontWeight: '500', color: '#111827'}}>{point.cameraLocation || 'Unknown'}</td>
+                    <td style={{...tdStyle, color: '#6b7280', fontFamily: 'monospace'}}>{point.cameraId}</td>
+                    <td style={tdStyle}>{new Date(point.timestamp).toLocaleString(undefined, {
+                      dateStyle: 'medium',
+                      timeStyle: 'medium'
+                    })}</td>
+                  </tr>
+                ))}
+                {pathData.length === 0 && (
+                  <tr>
+                    <td colSpan="4" style={{ padding: '24px', textAlign: 'center', color: '#6b7280' }}>
+                      {loadingPath ? 'Loading path data...' : 'No sightings found.'}
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
           </div>
-        )}
+        </div>
       </div>
     </div>
   );
 }
 
-const floatingSearchStyle = {
-  position: 'absolute',
-  top: '24px',
-  left: '24px',
-  width: '380px',
-  backgroundColor: '#fff',
-  borderRadius: '8px',
-  boxShadow: '0 2px 4px rgba(0,0,0,0.2)',
-  zIndex: 10,
-  display: 'flex',
-  flexDirection: 'column',
-  overflow: 'hidden'
+const thStyle = {
+  padding: '12px 24px',
+  fontSize: '12px',
+  fontWeight: '600',
+  color: '#374151',
+  textTransform: 'uppercase',
+  letterSpacing: '0.05em',
+  borderBottom: '1px solid #e5e7eb'
 };
 
-const searchInputStyle = {
-  flex: 1,
-  border: 'none',
-  padding: '12px 16px',
-  fontSize: '15px',
-  outline: 'none',
-  color: '#3c4043'
-};
-
-const searchBtnStyle = {
-  background: 'none',
-  border: 'none',
-  padding: '12px 16px',
-  cursor: 'pointer',
-  display: 'flex',
-  alignItems: 'center',
-  justifyContent: 'center'
+const tdStyle = {
+  padding: '16px 24px',
+  fontSize: '14px',
+  whiteSpace: 'nowrap'
 };
