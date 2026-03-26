@@ -5,73 +5,40 @@ import ApiError from "../utils/ApiError.js";
 import ApiResponse from "../utils/ApiResponse.js";
 import asyncHandler from "../utils/asyncHandler.js";
 import { normalisePlate } from "../utils/plate.js";
-import {
-    KEY_ACTIVE, KEY_UNAUTH,
-    resolveVehicle,
-    handleSighting,
-    handleAuthEntry, handleAuthExit,
-    handleUnauthEntry, handleUnauthRescan,
-} from "../services/scan.service.js";
+import { KEY_ACTIVE, KEY_UNAUTH } from "../services/scan.service.js";
+import { scanQueue } from "../utils/queue.js";
+import crypto from "crypto";
 
 //  POST /api/v1/scan
-//  Accepts JSON from hardware / mock:
-//  {
-//    "camera_id"  : "uuid",
-//    "vehicle_no" : "DL3CAF0001",
-//    "timestamp"  : "2025-02-22T15:00:00Z",   // optional, defaults to now
-//    "confidence" : 0.94,                       // optional
-//    "raw_plate"  : "DL 3C AF 0001"            // raw string from hardware (optional)
-//  }
 export const processScan = asyncHandler(async (req, res) => {
-    const { camera_id, vehicle_no, timestamp, confidence, raw_plate } = req.body;
+    const { camera_id, vehicle_no, timestamp, confidence, model_confidence, raw_plate } = req.body;
 
     if (!camera_id) throw new ApiError(StatusCodes.BAD_REQUEST, "camera_id is required");
     if (!vehicle_no) throw new ApiError(StatusCodes.BAD_REQUEST, "vehicle_no is required");
 
     const vehicleNo = normalisePlate(vehicle_no);
-    const rawPlate = raw_plate || vehicleNo;
+    const rawPlate = raw_plate || vehicle_no;
     const scanTime = timestamp ? new Date(timestamp) : new Date();
-    const confScore = confidence ? parseFloat(confidence) : null;
 
-    // 1. Verify camera exists
-    const camera = await prisma.camera.findUnique({ where: { id: camera_id } });
-    if (!camera) throw new ApiError(StatusCodes.NOT_FOUND, `Camera not found: ${camera_id}`);
+    const hashStr = `${camera_id}-${vehicleNo}-${scanTime.toISOString()}`;
+    const jobId = crypto.createHash("md5").update(hashStr).digest("hex");
 
-    // 2. Resolve vehicle auth (Redis → DB)
-    const authInfo = await resolveVehicle(vehicleNo);
-    const isAuthorized = authInfo.isAuthorized;
+    await scanQueue.add(
+        "processScanJob", 
+        {
+            camera_id,
+            vehicleNo,
+            rawPlate,
+            scanTime,
+            confidence: confidence ? parseFloat(confidence) : null,
+            model_confidence: model_confidence ? parseFloat(model_confidence) : null
+        }, 
+        { jobId }
+    );
 
-    const ctx = { res, camera, vehicleNo, vehicleId: authInfo.vehicleId ?? null, rawPlate, confScore, isAuthorized, authInfo, scanTime, camera_id };
-
-    // 3. INTERIOR camera → sighting only, no gate logic
-    if (camera.cameraType === "INTERIOR") return handleSighting(ctx);
-
-    // 4. Gate camera — check active session
-    const activeKey = KEY_ACTIVE(vehicleNo);
-    const activeRaw = await redis.get(activeKey);
-    const activeSession = activeRaw ? JSON.parse(activeRaw) : null;
-
-    // 4a. Authorized vehicle
-    if (isAuthorized) {
-        return activeSession
-            ? handleAuthExit({ ...ctx, activeKey, activeSession })
-            : handleAuthEntry({ ...ctx, activeKey });
-    }
-
-    // 4b. Unauthorized vehicle
-    const unauthKey = KEY_UNAUTH(vehicleNo);
-    const unauthData = await redis.get(unauthKey);
-
-    if (unauthData) return handleUnauthRescan({ ...ctx, unauthData, unauthKey, activeKey });
-    if (!unauthData && !activeSession) return handleUnauthEntry({ ...ctx, unauthKey, activeKey });
-
-    // Fallback — edge case: unauth vehicle with stale activeSession but no unauthKey
-    return res.status(StatusCodes.OK).json(new ApiResponse(StatusCodes.OK, {
-        vehicleNo,
-        isAuthorized: false,
-        vehicleCategory: "UNVERIFIED",
-        message: "⚠️ Unverified vehicle — no active session found.",
-    }, "Unverified vehicle, no session"));
+    return res.status(StatusCodes.ACCEPTED).json(
+        new ApiResponse(StatusCodes.ACCEPTED, { vehicleNo }, "Scan queued for processing")
+    );
 });
 
 

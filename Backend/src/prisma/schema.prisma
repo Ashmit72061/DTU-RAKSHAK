@@ -46,12 +46,14 @@ model Camera {
   id             String @id @default(uuid())
   lat            Float
   long           Float
-  cameraType     String  // "ENTRY" | "EXIT" | "BOTH" | "INTERIOR"
+  cameraType     String  // "ENTRY" | "EXIT" | "SIGHTING"
   cameraLocation String
 
   createdAt DateTime @default(now())
 
-  logs EntryExitLog[]
+  logs      EntryExitLog[]
+  sightings Sighting[]
+  alerts    Alert[]
 
   @@map("cameras")
 }
@@ -74,17 +76,64 @@ model EntryExitLog {
   vehicleId String?  // FK → vehicles.id, null for unregistered vehicles
   vehicle   Vehicle? @relation(fields: [vehicleId], references: [id])
 
-  logType         String    @default("ENTRY")  // "ENTRY" | "EXIT" | "SIGHTING"
-  confidence      Float?                        // YOLO detection confidence from edge device
-  rawPlate        String                        // raw OCR string before normalisation
+  logType         String    @default("ENTRY")  // "ENTRY" | "EXIT" | "ORPHAN"
+  ocrConfidence   Float?                        // OCR (Text reading) confidence
+  modelConfidence Float?                        // YOLO (Car detection) confidence
+  rawPlate        String                        // raw OCR string
   entryTime       DateTime  @default(now())
   exitTime        DateTime?                     // null unless EXIT
   vehicleDuration Int?                          // seconds on campus (gate cameras only)
   isAuthorized    Boolean   @default(false)     // true if vehicle exists in vehicles table
   vehicleCategory String    @default("UNVERIFIED")
-  // "REGISTERED" | "UNVERIFIED" (cab/auto/taxi/delivery – 30-min window)
-
+  
   createdAt DateTime @default(now())
 
+  sightings Sighting[]
+
   @@map("entry_exit_logs")
+}
+
+// ── Sighting Log (Interior Tracking) ─────────────────────────────────────────
+model Sighting {
+  id         String @id @default(uuid())
+  
+  sessionId  String
+  session    EntryExitLog @relation(fields: [sessionId], references: [id])
+  
+  cameraId   String
+  camera     Camera       @relation(fields: [cameraId], references: [id])
+  
+  timestamp       DateTime @default(now())
+  ocrConfidence   Float?   // OCR (Text reading) confidence
+  modelConfidence Float?   // YOLO (Car detection) confidence
+  
+  createdAt  DateTime @default(now())
+
+  @@map("sightings")
+}
+
+// ── Alert & Anomaly Tracking ─────────────────────────────────────────────────
+model Alert {
+  id          String   @id @default(uuid())
+  
+  alertType   String   // e.g., "UNAUTHORIZED_ENTRY", "OVERSTAY", "EXIT_WITHOUT_ENTRY", "ORPHAN_SIGHTING", "CONCURRENT_ENTRY_OVERWRITE"
+  severity    String   @default("MEDIUM") // "LOW" | "MEDIUM" | "HIGH" | "CRITICAL"
+  status      String   @default("OPEN")   // "OPEN" | "ACKNOWLEDGED" | "RESOLVED"
+  
+  description String   // Human-readable message explaining the anomaly
+  
+  vehicleNo   String?  // The raw plate number involved
+  
+  cameraId    String?  
+  camera      Camera?  @relation(fields: [cameraId], references: [id])
+  
+  logId       String?  // Can tie back to an EntryExitLog if the alert generated during a log event
+  
+  resolvedBy  String?  // Admin User ID who resolved the alert
+  resolvedAt  DateTime?
+  
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@map("alerts")
 }

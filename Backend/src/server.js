@@ -1,6 +1,7 @@
 import app from "./app.js";
 import env from "./configs/env.config.js";
 import prisma from "./models/prisma.js";
+import "./workers/scan.worker.js"; // Initialize BullMQ background worker
 
 const startServer = async () => {
     try {

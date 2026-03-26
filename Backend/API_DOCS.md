@@ -39,7 +39,7 @@
 | GET | `/vehicles?search=DL&page=1&limit=15` | Paginated list |
 | POST | `/vehicles` | Create registered vehicle |
 | POST | `/vehicles/bulk` | Bulk import from CSV |
-| GET | `/vehicles/:vehicleNo` | Single vehicle + its logs |
+| GET | `/vehicles/:vehicleNo` | Single vehicle  |
 | PUT | `/vehicles/:vehicleNo` | Update vehicle |
 | DELETE | `/vehicles/:vehicleNo` | Delete vehicle |
 
