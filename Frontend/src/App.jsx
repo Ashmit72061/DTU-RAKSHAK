@@ -12,6 +12,7 @@ import Dashboard from './pages/Dashboard';
 import Vehicles from './pages/Vehicles';
 import Cameras from './pages/Cameras';
 import Logs from './pages/Logs';
+import LiveMap from './pages/LiveMap';
 import Alerts from './pages/Alerts';
 
 function PrivateLayout({ children }) {
@@ -65,6 +66,9 @@ export default function App() {
         } />
         <Route path="/logs" element={
           <RequireAuth><PrivateLayout><Logs /></PrivateLayout></RequireAuth>
+        } />
+        <Route path="/live-map" element={
+          <RequireAuth><PrivateLayout><LiveMap /></PrivateLayout></RequireAuth>
         } />
         <Route path="/alerts" element={
           <RequireAuth><PrivateLayout><Alerts /></PrivateLayout></RequireAuth>

@@ -273,3 +273,50 @@
   background: rgba(255, 255, 255, .1);
   color: #fff;
 }
+
+/* ── Map Split Layout ── */
+.logs-map-layout {
+  display: flex;
+  gap: 24px;
+  align-items: flex-start;
+}
+
+.logs-list-side {
+  flex: 1;
+  min-width: 0;
+}
+
+.logs-map-side {
+  width: 450px;
+  flex-shrink: 0;
+  position: sticky;
+  top: 24px;
+  height: calc(100vh - 150px);
+  background: #fff;
+  border-radius: 12px;
+  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+  overflow: hidden;
+}
+
+@media (max-width: 1024px) {
+  .logs-map-layout {
+    flex-direction: column-reverse; /* Map on top of list in mobile */
+  }
+  .logs-map-side {
+    width: 100%;
+    height: 400px;
+    position: static;
+  }
+}
+
+.clickable-row {
+  cursor: pointer;
+  transition: background 0.2s;
+}
+.clickable-row:hover {
+  background: #f8fafc;
+}
+.selected-row {
+  background: #e0f2fe !important;
+  cursor: pointer;
+}

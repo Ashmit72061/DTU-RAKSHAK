@@ -1,5 +1,5 @@
 import { NavLink, useNavigate, useLocation } from 'react-router-dom';
-import { LayoutDashboard, Car, Camera, ClipboardList, LogOut, X, KeyRound, Bell } from 'lucide-react';
+import { LayoutDashboard, Car, Camera, ClipboardList, LogOut, X, KeyRound, Bell, Map } from 'lucide-react';
 import { logout } from '../api';
 
 const nav = [
@@ -8,6 +8,7 @@ const nav = [
   { to: '/cameras',   icon: Camera,          label: 'Cameras' },
   { to: '/logs',      icon: ClipboardList,   label: 'Entry/Exit Logs' },
   { to: '/alerts',    icon: Bell,            label: 'Alerts' },
+  { to: '/live-map',  icon: Map,             label: 'Live Map' },
 ];
 
 export default function Sidebar({ isOpen, onClose }) {
