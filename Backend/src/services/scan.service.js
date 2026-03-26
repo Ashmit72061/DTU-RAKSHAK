@@ -24,7 +24,6 @@ const buildBaseLogData = ({ cameraId, vehicleNo, vehicleNoHash, vehicleId, rawPl
     ocrConfidence: confScore,
     modelConfidence: modelConf,
     isAuthorized,
-    vehicleCategory: isAuthorized ? "REGISTERED" : "UNVERIFIED",
     entryTime: scanTime,
 });
 
@@ -77,9 +76,8 @@ async function handleSighting({ tx, camera, vehicleNo, vehicleNoHash, vehicleId,
         await tx.alert.create({
             data: {
                 alertType: "ORPHAN_SIGHTING",
-                severity: "LOW",
                 description: `Vehicle scanned at interior camera but has no active ENTRY session.`,
-                vehicleNo,
+                rawPlate,
                 cameraId,
                 logId: activeSession.id
             }
@@ -91,7 +89,8 @@ async function handleSighting({ tx, camera, vehicleNo, vehicleNoHash, vehicleId,
             sessionId: activeSession.id,
             cameraId,
             ocrConfidence: confScore,
-            modelConfidence: modelConf
+            modelConfidence: modelConf,
+            rawPlate
         }
     });
 }
@@ -127,9 +126,8 @@ async function handleAuthExit({ tx, camera, vehicleNo, vehicleNoHash, vehicleId,
         await tx.alert.create({
             data: {
                 alertType: "EXIT_WITHOUT_ENTRY",
-                severity: "MEDIUM",
                 description: `Registered vehicle scanned at EXIT gate but had no active ENTRY session.`,
-                vehicleNo,
+                rawPlate,
                 cameraId,
                 logId: anomalyLog.id
             }
@@ -171,9 +169,8 @@ async function handleUnauthRescan({ tx, camera, vehicleNo, vehicleNoHash, scanTi
         await tx.alert.create({
             data: {
                 alertType: "OVERSTAY",
-                severity: "HIGH",
                 description: `Unverified vehicle overstayed 30-minute limit. Total duration: ${duration}s`,
-                vehicleNo,
+                rawPlate,
                 cameraId,
                 logId
             }
@@ -242,9 +239,8 @@ export async function processScanJob(jobData) {
                 await tx.alert.create({
                     data: { 
                         alertType: "OVERSTAY", 
-                        severity: "HIGH", 
                         description: `Unverified vehicle exited. Session heavily exceeded 30m timeline bounds.`, 
-                        vehicleNo, 
+                        rawPlate: ctxBase.rawPlate, 
                         cameraId: camera.id, 
                         logId: activeSession.logId 
                     }
