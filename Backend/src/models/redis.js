@@ -2,7 +2,7 @@ import Redis from "ioredis";
 import env from "../configs/env.config.js";
 
 const redis = new Redis(env.redisUrl, {
-    maxRetriesPerRequest: 3,
+    maxRetriesPerRequest: null,
     retryStrategy(times) {
         const delay = Math.min(times * 200, 2000);
         return delay;

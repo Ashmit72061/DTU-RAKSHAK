@@ -6,7 +6,7 @@ import ApiResponse from "../utils/ApiResponse.js";
 import asyncHandler from "../utils/asyncHandler.js";
 import { normalisePlate } from "../utils/plate.js";
 import { hashField, decryptVehicle } from "../utils/crypto.util.js";
-import { KEY_ACTIVE, KEY_UNAUTH } from "../services/scan.service.js";
+import { KEY_ACTIVE } from "../services/scan.service.js";
 import { scanQueue } from "../utils/queue.js";
 import crypto from "crypto";
 
