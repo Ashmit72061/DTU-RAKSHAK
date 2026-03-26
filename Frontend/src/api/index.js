@@ -18,3 +18,5 @@ export * from './auth.service';
 export * from './vehicle.service';
 export * from './camera.service';
 export * from './scan.service';
+export * from './alert.service';
+
