@@ -61,7 +61,7 @@ model Camera {
   id             String @id @default(uuid())
   lat            Float
   long           Float
-  cameraType     String  // "ENTRY" | "EXIT" | "SIGHTING"
+  cameraType     String  // "ENTRY" | "EXIT" | "INTERIOR"
   cameraLocation String
 
   createdAt DateTime @default(now())

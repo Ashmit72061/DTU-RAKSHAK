@@ -63,7 +63,7 @@ const cameraLimiter = rateLimit({
     legacyHeaders: false,
     message: { statusCode: 429, message: "Camera API Hardware Limit Exceeded.", success: false },
 });
-app.use("/api/v1/scan",     cameraLimiter, scanRoutes);
+app.use("/api/v1/scan", cameraLimiter, scanRoutes);
 
 // Real-time SSE alert streaming for the Dashboard
 app.get("/api/v1/alerts/stream", limiter, sseMiddleware);

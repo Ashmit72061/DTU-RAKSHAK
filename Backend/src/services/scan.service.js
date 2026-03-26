@@ -188,7 +188,7 @@ export async function processScanJob(jobData) {
         const activeRaw = await redis.get(activeKey);
         const activeSession = activeRaw ? JSON.parse(activeRaw) : null;
 
-        if (camera.cameraType === "SIGHTING") {
+        if (camera.cameraType === "INTERIOR") {
             await prisma.$transaction(async (tx) => handleSighting({ ...ctxBase, tx, activeSession }));
             return;
         }
