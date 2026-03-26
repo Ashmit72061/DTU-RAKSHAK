@@ -119,7 +119,7 @@ Changes the password for the **currently logged-in user**. Requires the current 
 | PUT | `/vehicles/:vehicleNo` | Update vehicle |
 | DELETE | `/vehicles/:vehicleNo` | Delete vehicle |
 
-> **Security Note:** `vehicleNo` and `mobileNo` are stored securely with AES-256-GCM encryption and decrypted on the fly. Because of this, the `search` query parameter cannot do partial matches on plate numbers (`vehicleNo`) — you can search by `name`, `stickerNo`, or `dept`. For an exact vehicle lookup, use `GET /vehicles/:vehicleNo`.
+> **Security Note:** `vehicleNo` and `mobileNo` are stored with AES-256-GCM encryption. All DB lookups use a deterministic SHA-256 hash (`vehicleNoHash`). The `search` query cannot do partial plate matches — search by `name`, `stickerNo`, or `dept`. For an exact vehicle lookup, use `GET /vehicles/:vehicleNo`.
 
 **POST / PUT body:**
 ```json
@@ -177,95 +177,258 @@ Changes the password for the **currently logged-in user**. Requires the current 
   "cameraLocation": "Main Gate - South Campus"
 }
 ```
-> `cameraType`: `"ENTRY"` | `"EXIT"` | `"BOTH"` | `"INTERIOR"`
+> `cameraType`: `"ENTRY"` | `"EXIT"` | `"SIGHTING"`
 
-**POST `/cameras/bulk` — CSV import:**
+---
 
-- **Content-Type:** `multipart/form-data`
-- **Field:** `file` — a `.csv` file (max 5 MB)
-- **CSV columns (first row = header):** `lat`, `long`, `cameraType`, `cameraLocation`
-- `lat` / `long` must be valid numbers; `cameraType` must be one of the enum values above.
+## Scan Pipeline — `/api/v1/scan`
 
-```json
-// Response data shape
-{
-  "inserted": 5,
-  "skipped": 0,
-  "errors": [
-    { "row": 3, "reason": "Invalid cameraType \"outdoor\" — must be one of: ENTRY, EXIT, BOTH, INTERIOR" }
-  ]
-}
+### Architecture Overview
+
+The scan pipeline is a fully **asynchronous, queue-backed** system. The camera hardware never waits for database processing — it fires a JSON payload and instantly receives `202 Accepted`.
+
+```
+Camera Hardware
+    │
+    │  POST /api/v1/scan  (JSON payload)
+    ▼
+scan.controller.js  ──►  Validates, hashes jobId, pushes to BullMQ  ──►  202 Accepted
+                                           │
+                                        Redis
+                                    (BullMQ Queue)
+                                           │
+                                    scan.worker.js
+                                           │
+                                    scan.service.js
+                                    (processScanJob)
+                                           │
+                           ┌──────────────┴──────────────┐
+                           │                             │
+                      Redlock (3s mutex              PostgreSQL
+                       per vehicle)                  $transaction
 ```
 
 ---
 
-## 🔒 Scan — `/api/v1/scan`
+### POST `/api/v1/scan` — Process Camera Payload
 
-### POST `/scan` — Process hardware JSON
+> **Auth:** `X-Edge-Api-Key: <secret>` header. Edge camera devices use a shared long-lived API key stored in `EDGE_API_KEY` env var — NOT a user JWT.
 
-> **Auth:** `X-Edge-Api-Key: <secret>` header — **NOT** a user JWT. Edge devices (YOLO + Flask cameras) use a shared long-lived API key stored in the `EDGE_API_KEY` env var.
+**Rate Limit:** 1,000 req/min (generous sanity-check for hardware loops)
 
-Accepts the JSON payload sent by camera hardware. No image upload needed.
+**Request Body:**
 
 ```json
 {
-  "camera_id":  "uuid-of-camera",
-  "vehicle_no": "DL3CAF0001",
-  "timestamp":  "2025-02-22T09:00:00Z",
-  "confidence": 0.94,
-  "raw_plate":  "DL 3C AF 0001"
+  "camera_id":        "uuid-of-camera",
+  "vehicle_no":       "DL 3C AF 0001",
+  "raw_plate":        "DL 3C AF 0001",
+  "timestamp":        "2025-02-22T09:00:00Z",
+  "confidence":       0.94,
+  "model_confidence": 0.87
 }
 ```
-> `timestamp`, `confidence`, `raw_plate` are optional
 
-**Possible responses by scenario:**
+| Field | Required | Notes |
+|-------|----------|-------|
+| `camera_id` | ✅ | UUID of the registered camera |
+| `vehicle_no` | ✅ | OCR-recognised plate — will be normalised (`DL3CAF0001`) |
+| `raw_plate` | ✅ | Verbatim string from the edge OCR device |
+| `timestamp` | ❌ | Defaults to `now()` if omitted |
+| `confidence` | ❌ | OCR confidence score (0–1) |
+| `model_confidence` | ❌ | YOLO model confidence score (0–1) |
 
-| Event | `isAuthorized` | Response |
-|-------|---------------|----------|
-| Registered vehicle, no active session | `true` | `ENTRY` granted |
-| Registered vehicle, active session exists | `true` | `EXIT` recorded |
-| Unverified vehicle, first scan | `false` | `ENTRY` + 30-min window starts |
-| Unverified vehicle, seen again < 30min | `false` | `EXIT` within window |
-| Unverified vehicle, seen again > 30min | `false` | `OVERSTAY_EXIT` 🚨 alert |
-| INTERIOR camera, any vehicle | any | `SIGHTING` log only |
-
-**Sample success response:**
+**Response `202`:**
 ```json
-{
-  "data": {
-    "event": "ENTRY",
-    "vehicleNo": "DL3CAF0001",
-    "isAuthorized": true,
-    "vehicleInfo": { "name": "Rahul", "dept": "CSE", "vehicleType": "2W" },
-    "message": "✅ Entry granted — registered vehicle",
-    "camera": { "id": "...", "location": "Main Gate" },
-    "log": { ... }
-  }
-}
+{ "statusCode": 202, "data": { "jobId": "md5hash" }, "message": "Scan queued", "success": true }
 ```
 
 ---
 
-### GET `/scan/logs` — All logs (paginated + filtered)
+### BullMQ Job Processing
+
+The controller hashes `camera_id + vehicleNo + scanTime` into an `MD5 jobId` — this prevents duplicate jobs from camera burst-retries. BullMQ silently drops any duplicate `jobId`.
+
+**Worker concurrency:** 15 parallel jobs — safe for a 4c/16GB VPS.
+
+**Job names handled by the worker:**
+
+| Job Name | Handler | Description |
+|----------|---------|-------------|
+| `processScanJob` | `processScanJob()` | Main vehicle scan event |
+| `checkOverstayBomb` | `processOverstayBomb()` | Delayed 30-minute overstay alarm |
+
+---
+
+### Scan Processing State Machine
+
+Once the worker receives a `processScanJob`, it runs through the following logic:
+
+**Step 1: Acquire Redlock**  
+A distributed Redis mutex is acquired for `lock:vehicle:<vehicleNoHash>` (max 3 seconds). This fully serializes concurrent scans of the same vehicle — critical when two cameras fire at the same millisecond.
+
+**Step 2: Resolve Camera**  
+Camera config is fetched from Redis (24h TTL). Falls back to PostgreSQL on cache miss.
+
+**Step 3: Resolve Vehicle Auth**  
+`isAuthorized` status is resolved via `vehicle:<plate>` Redis key (24h TTL). Falls back to DB on miss.
+
+**Step 4: Load Active Session**  
+`active:<plate>` Redis key is checked. Contains `{ logId, entryTime }` if vehicle is currently on campus.
+
+**Step 5: Route by Camera Type**
+
+---
+
+#### `cameraType: "SIGHTING"` (Interior Camera)
+
+Records an interior sighting, attached to the vehicle's current active campus session.
+
+| Condition | Action |
+|-----------|--------|
+| Active session exists (Redis) | Attach `Sighting` record to session |
+| Redis empty, DB session found | Fallback: attach `Sighting` to DB session |
+| No session anywhere | Create `ORPHAN` log + `ORPHAN_SIGHTING` 🚨 alert |
+
+---
+
+#### `cameraType: "ENTRY"` — Authorized Vehicle
+
+| Condition | Action |
+|-----------|--------|
+| No active session | Create `ENTRY` log. Store `active:<plate>` in Redis (24h TTL) |
+| Active session exists | 🚨 `CONCURRENT_ENTRY_OVERWRITE` alert. Old session left open. New `ENTRY` created |
+
+---
+
+#### `cameraType: "EXIT"` — Authorized Vehicle
+
+| Condition | Action |
+|-----------|--------|
+| Active session in Redis | Calculate duration = `scanTime − entryTime`. Close log with `exitTime`. Delete Redis key |
+| Redis empty, DB session found | Fallback DB query. Same close logic |
+| No session anywhere | Create `ORPHAN` log + 🚨 `EXIT_WITHOUT_ENTRY` alert |
+
+---
+
+#### `cameraType: "ENTRY"` — Unverified Vehicle
+
+| Condition | Action |
+|-----------|--------|
+| No active session | Create `ENTRY` log. Store `active:<plate>` (24h TTL). Schedule `checkOverstayBomb` (30-min delay) |
+| Active session exists | 🚨 `CONCURRENT_ENTRY_OVERWRITE` alert. New `ENTRY` created |
+
+---
+
+#### `cameraType: "EXIT"` — Unverified Vehicle
+
+| Condition | Action |
+|-----------|--------|
+| Active session in Redis | `duration = scanTime − entryTime`. If `duration > 1800s`: 🚨 `OVERSTAY` alert. Close log either way |
+| Redis empty, DB session found | Same close logic with math-safe `scanTime − dbSession.entryTime` |
+| No session anywhere | Create `ORPHAN` log + 🚨 `EXIT_WITHOUT_ENTRY` alert |
+
+> **30-minute Overstay Bomb:** When an Unverified vehicle enters, a BullMQ delayed job (`delay: 1800000ms`) is scheduled. At exactly 30 minutes, `processOverstayBomb` wakes up and checks if the vehicle **still has no `exitTime`**. If so, it fires an `ACTIVE_OVERSTAY_ALARM` alert instantly over SSE to all connected dashboards.
+>
+> Duration is always computed from **`scanTime` (camera timestamp)**, never `Date.now()` — immune to server/queue lag.
+
+---
+
+### GET `/api/v1/scan/logs` — All Logs (Paginated + Filtered)
+
+🔒 Requires admin JWT.
 
 ```
 ?page=1&limit=20
 ?authorized=true|false
-?logType=ENTRY|EXIT|SIGHTING
+?logType=ENTRY|EXIT|ORPHAN
 ?cameraId=<uuid>
 ?from=2025-01-01&to=2025-01-31
 ```
 
-### GET `/scan/logs/active` — Vehicles currently on campus
+---
 
-Returns all logs where `exitTime = null`. Unverified vehicles include `remainingSeconds` and `isOverdue` from Redis.
+### GET `/api/v1/scan/logs/active` — Vehicles Currently On Campus
 
-### GET `/scan/logs/:vehicleNo` — Vehicle history
+🔒 Requires admin JWT.
+
+Returns all logs where `exitTime = null`.
+
+---
+
+### GET `/api/v1/scan/logs/:vehicleNo` — Vehicle History
+
+🔒 Requires admin JWT.
 
 ```
 ?from=2025-01-01&to=2025-02-28
 ```
-Also returns `currentlyOnCampus` (bool) and `unauthStatus` (if active 30-min window).
+
+---
+
+## Alert System
+
+### Database Storage
+
+Every anomaly is saved to the `alerts` table via `broadcastAlert()`. This helper:
+1. Inserts the `Alert` row inside the active Prisma `$transaction`.
+2. Emits `NEW_ALERT` on the global Node.js `EventEmitter` — which pushes it instantly to all connected SSE clients.
+
+**Alert Types:**
+
+| `alertType` | Severity | Trigger |
+|-------------|----------|---------|
+| `ORPHAN_SIGHTING` | 🟡 Medium | Interior camera saw a vehicle with no ENTRY session |
+| `CONCURRENT_ENTRY_OVERWRITE` | 🟠 High | Vehicle scanned at ENTRY gate while already inside |
+| `EXIT_WITHOUT_ENTRY` | 🟠 High | Vehicle scanned at EXIT gate with no ENTRY record |
+| `OVERSTAY` | 🔴 Critical | Unverified vehicle exceeded 30-min window at EXIT |
+| `ACTIVE_OVERSTAY_ALARM` | 🔴 Critical | Unverified vehicle still inside at exactly 30-min mark |
+
+**Alert Model:**
+
+```json
+{
+  "id":          "uuid",
+  "alertType":   "OVERSTAY",
+  "status":      "OPEN",
+  "description": "Unverified vehicle exited. Session exceeded 30m timeframe (2140s).",
+  "rawPlate":    "DL 3C AF 0001",
+  "cameraId":    "uuid",
+  "logId":       "uuid",
+  "createdAt":   "2025-03-26T16:34:00Z"
+}
+```
+
+`status` lifecycle: `OPEN` → `ACKNOWLEDGED` → `RESOLVED`
+
+---
+
+### Real-Time SSE Stream
+
+**`GET /api/v1/alerts/stream`** — 🔒 JWT required. Rate limited at 100 req/15min.
+
+The dashboard makes a persistent HTTP connection. The server keeps the line open and pushes events as they occur.
+
+**Frontend usage:**
+```javascript
+const stream = new EventSource("/api/v1/alerts/stream", {
+    headers: { Authorization: `Bearer ${token}` }
+});
+
+stream.onmessage = (e) => {
+    const alert = JSON.parse(e.data);
+    if (alert.type === "CONNECTED") return; // Handshake
+    // alert = { id, alertType, rawPlate, description, cameraId, logId, ... }
+    showNotification(alert);
+};
+```
+
+**Events pushed:**
+
+| Event | When |
+|-------|------|
+| `CONNECTED` | Immediately on subscription (handshake) |
+| `NEW_ALERT` | Any anomaly detected by the scan pipeline |
 
 ---
 
@@ -273,9 +436,13 @@ Also returns `currentlyOnCampus` (bool) and `unauthStatus` (if active 30-min win
 
 | Key | Stores | TTL |
 |-----|--------|-----|
-| `vehicle:DL3CAF0001` | `{ isAuthorized, name, dept }` | 24h |
-| `active:DL3CAF0001` | entry log ID | 24h |
-| `unauth:DL3CAF0001` | `{ logId, entryTime, allowedUntil }` | 30min |
+| `vehicle:<plate>` | `{ isAuthorized, vehicleId }` | 24h |
+| `active:<plate>` | `{ logId, entryTime }` | 24h |
+| `camera:<id>` | Full camera config object | 24h |
+| `lock:vehicle:<hash>` | Redlock mutex | 3s (auto-released) |
+| BullMQ internal keys | Job queues, delayed job timers | Managed by BullMQ |
+
+> **Note:** `unauth:<plate>` keys have been removed. Overstay detection is now entirely math-driven (`scanTime − entryTime > 1800s`) and proactive-bomb-driven (BullMQ `checkOverstayBomb`), making it completely immune to Redis eviction timing edge-cases.
 
 ---
 
@@ -283,10 +450,19 @@ Also returns `currentlyOnCampus` (bool) and `unauthStatus` (if active 30-min win
 
 | Status | Meaning |
 |--------|---------|
-| `400` | Bad request / invalid plate format |
+| `400` | Bad request / missing required field / invalid plate format |
 | `401` | Invalid / expired token or OTP |
-| `403` | Account not verified |
-| `404` | Resource not found |
-| `409` | Duplicate (email / vehicleNo / stickerNo) |
-| `429` | Rate limit exceeded (100 req / 15min) |
-| `500` | Server error |
+| `403` | Account not verified / forbidden |
+| `404` | Resource not found (camera, vehicle, log) |
+| `409` | Conflict — duplicate vehicleNo / stickerNo / email |
+| `422` | Low confidence OCR scan rejected by the worker |
+| `429` | Rate limit exceeded (100 req/15min dashboard / 1000 req/min camera) |
+| `500` | Internal server error |
+
+**Worker-specific errors (BullMQ retry policy):**
+
+| Error Class | Retries | Behavior |
+|-------------|---------|----------|
+| `CameraNotFoundError` | 0 | Job dropped — camera UUID is invalid |
+| `ValidationError` | 0 | Job dropped — payload missing required fields |
+| Generic `Error` | Up to 3 | BullMQ exponential backoff retry |
