@@ -3,8 +3,8 @@ import { Plus, MapPin, Pencil, Trash2, Upload, Download, FileText, CheckCircle, 
 import { getCameras, createCamera, updateCamera, deleteCamera, bulkImportCameras } from '../api';
 
 const EMPTY = { lat: '', long: '', cameraType: 'ENTRY', cameraLocation: '' };
-const TYPES = ['ENTRY', 'EXIT', 'BOTH', 'INTERIOR'];
-const TYPE_COLORS = { ENTRY: 'green', EXIT: 'red', BOTH: 'blue', INTERIOR: 'gray' };
+const TYPES = ['ENTRY', 'EXIT', 'INTERIOR'];
+const TYPE_COLORS = { ENTRY: 'green', EXIT: 'red', INTERIOR: 'blue' };
 
 const CAMERA_CSV_TEMPLATE =
   'lat,long,cameraType,cameraLocation\n' +
