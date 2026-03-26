@@ -2,6 +2,8 @@ import prisma from "../models/prisma.js";
 import redis from "../models/redis.js";
 import redlock from "../utils/redlock.js";
 import { hashField } from "../utils/crypto.util.js";
+import { alertEmitter } from "../utils/sse.js";
+import { scanQueue } from "../utils/queue.js";
 import { 
     ValidationError, 
     CameraNotFoundError 
@@ -10,11 +12,15 @@ import {
 // ── Redis key helpers 
 export const KEY_VEHICLE = (plate) => `vehicle:${plate}`;   // auth cache  (24h)
 export const KEY_ACTIVE = (plate) => `active:${plate}`;    // current entry session
-export const KEY_UNAUTH = (plate) => `unauth:${plate}`;    // 30-min unauth window
-export const UNAUTH_TTL = 30 * 60;                         // 30 minutes in seconds
 export const VEHICLE_TTL = 24 * 60 * 60;                   // 24 hours in seconds
 
 // ── Shared internal helpers 
+async function broadcastAlert(tx, alertData) {
+    const alert = await tx.alert.create({ data: alertData });
+    alertEmitter.emit("NEW_ALERT", alert);
+    return alert;
+}
+
 const buildBaseLogData = ({ cameraId, vehicleNo, vehicleNoHash, vehicleId, rawPlate, confScore, modelConf, isAuthorized, scanTime }) => ({
     cameraId,
     vehicleNo,          // Normalized plate string
@@ -26,8 +32,6 @@ const buildBaseLogData = ({ cameraId, vehicleNo, vehicleNoHash, vehicleId, rawPl
     isAuthorized,
     entryTime: scanTime,
 });
-
-const clearUnauthSession = (unauthKey, activeKey) => Promise.all([redis.del(unauthKey), redis.del(activeKey)]);
 
 async function fetchCameraFromCache(cameraId) {
     const cacheKey = `camera:${cameraId}`;
@@ -79,14 +83,12 @@ async function handleSighting({ tx, camera, vehicleNo, vehicleNoHash, vehicleId,
         });
         logId = orphanSession.id;
         
-        await tx.alert.create({
-            data: {
-                alertType: "ORPHAN_SIGHTING",
-                description: `Vehicle scanned at interior camera but has no active ENTRY session.`,
-                rawPlate,
-                cameraId,
-                logId
-            }
+        await broadcastAlert(tx, {
+            alertType: "ORPHAN_SIGHTING",
+            description: `Vehicle scanned at interior camera but has no active ENTRY session.`,
+            rawPlate,
+            cameraId,
+            logId
         });
     }
 
@@ -129,14 +131,12 @@ async function handleAuthExit({ tx, camera, vehicleNo, vehicleNoHash, vehicleId,
             data: { ...buildBaseLogData({ cameraId, vehicleNo, vehicleNoHash, vehicleId, rawPlate, confScore, modelConf, isAuthorized: true, scanTime }), logType: "ORPHAN" }
         });
         
-        await tx.alert.create({
-            data: {
-                alertType: "EXIT_WITHOUT_ENTRY",
-                description: `Registered vehicle scanned at EXIT gate but had no active ENTRY session.`,
-                rawPlate,
-                cameraId,
-                logId: anomalyLog.id
-            }
+        await broadcastAlert(tx, {
+            alertType: "EXIT_WITHOUT_ENTRY",
+            description: `Registered vehicle scanned at EXIT gate but had no active ENTRY session.`,
+            rawPlate,
+            cameraId,
+            logId: anomalyLog.id
         });
         return;
     }
@@ -149,42 +149,17 @@ async function handleAuthExit({ tx, camera, vehicleNo, vehicleNoHash, vehicleId,
     redis.del(activeKey).catch(() => {});
 }
 
-//  UNAUTHORIZED vehicle — ENTRY (starts 30-min window)
-async function handleUnauthEntry({ tx, camera, vehicleNo, vehicleNoHash, vehicleId, rawPlate, confScore, modelConf, scanTime, cameraId, unauthKey, activeKey }) {
+//  UNAUTHORIZED vehicle — ENTRY (starts 30-min window naturally tracked by mathematical offset bounds)
+async function handleUnauthEntry({ tx, camera, vehicleNo, vehicleNoHash, vehicleId, rawPlate, confScore, modelConf, scanTime, cameraId, activeKey }) {
     const log = await tx.entryExitLog.create({
         data: { ...buildBaseLogData({ cameraId, vehicleNo, vehicleNoHash, vehicleId: null, rawPlate, confScore, modelConf, isAuthorized: false, scanTime }), logType: "ENTRY" }
     });
 
-    const allowedUntil = new Date(new Date(scanTime).getTime() + UNAUTH_TTL * 1000).toISOString();
-    redis.setex(unauthKey, UNAUTH_TTL, JSON.stringify({ logId: log.id, entryTime: new Date(scanTime).toISOString(), allowedUntil })).catch(() => {});
-    // Setting activeKey to 24h to perfectly maintain fast log tracking even after the 30m grace timer expires 
+    // Keeping tracking logic identical to authorized cars (fast 24 hour Redis cache)
     redis.setex(activeKey, VEHICLE_TTL, JSON.stringify({ logId: log.id, entryTime: new Date(scanTime).toISOString() })).catch(() => {});
-}
-
-//  UNAUTHORIZED vehicle — RESCAN (overstay or normal exit)
-async function handleUnauthRescan({ tx, camera, vehicleNo, vehicleNoHash, scanTime, cameraId, unauthData, unauthKey, activeKey }) {
-    const { logId, entryTime, allowedUntil } = JSON.parse(unauthData);
-    const isOverdue = new Date(scanTime) > new Date(allowedUntil);
-    const duration = Math.round((new Date(scanTime) - new Date(entryTime)) / 1000);
-
-    await tx.entryExitLog.update({
-        where: { id: logId },
-        data: { logType: "EXIT", exitTime: scanTime, vehicleDuration: duration }
-    });
     
-    if (isOverdue) {
-        await tx.alert.create({
-            data: {
-                alertType: "OVERSTAY",
-                description: `Unverified vehicle overstayed 30-minute limit. Total duration: ${duration}s`,
-                rawPlate,
-                cameraId,
-                logId
-            }
-        });
-    }
-
-    clearUnauthSession(unauthKey, activeKey).catch(() => {});
+    // Proactive Bomb: Schedule alert exclusively 30 mins in the future natively
+    await scanQueue.add("checkOverstayBomb", { logId: log.id, vehicleNoHash, rawPlate }, { delay: 30 * 60 * 1000 });
 }
 
 // ── Main Orchestrator for BullMQ ──
@@ -223,7 +198,7 @@ export async function processScanJob(jobData) {
                 if (camera.cameraType === "ENTRY") {
                     if (activeSession) {
                         // Anomaly: Car was already inside, but entered again. Leave old session open, just log alert.
-                        await tx.alert.create({ data: { alertType: "CONCURRENT_ENTRY_OVERWRITE", description: "Registered vehicle scanned at ENTRY but was already inside campus. Previous session left open.", rawPlate: ctxBase.rawPlate, cameraId: camera.id, logId: activeSession.logId } });
+                        await broadcastAlert(tx, { alertType: "CONCURRENT_ENTRY_OVERWRITE", description: "Registered vehicle scanned at ENTRY but was already inside campus. Previous session left open.", rawPlate: ctxBase.rawPlate, cameraId: camera.id, logId: activeSession.logId });
                     }
                     await handleAuthEntry({ ...ctxBase, tx, activeKey });
                 } else if (camera.cameraType === "EXIT") {
@@ -233,41 +208,36 @@ export async function processScanJob(jobData) {
             return;
         }
 
-        const unauthKey = KEY_UNAUTH(vehicleNo);
-        const unauthData = await redis.get(unauthKey);
-
         await prisma.$transaction(async (tx) => {
             if (camera.cameraType === "ENTRY") {
                 if (activeSession) {
-                    // Anomaly: Unauth car was already inside, but entered again. Leave old session open, just log alert.
-                    await tx.alert.create({ data: { alertType: "CONCURRENT_ENTRY_OVERWRITE", description: "Unverified vehicle scanned at ENTRY but was already inside campus. Previous session left open.", rawPlate: ctxBase.rawPlate, cameraId: camera.id, logId: activeSession.logId } });
-                    clearUnauthSession(unauthKey, activeKey).catch(() => {});
+                    await broadcastAlert(tx, { alertType: "CONCURRENT_ENTRY_OVERWRITE", description: "Unverified vehicle scanned at ENTRY but was already inside campus. Previous session left open.", rawPlate: ctxBase.rawPlate, cameraId: camera.id, logId: activeSession.logId });
                 }
-                await handleUnauthEntry({ ...ctxBase, tx, unauthKey, activeKey });
+                await handleUnauthEntry({ ...ctxBase, tx, activeKey });
                 
             } else if (camera.cameraType === "EXIT") {
-                if (unauthData) {
-                    await handleUnauthRescan({ ...ctxBase, tx, unauthData, unauthKey, activeKey });
-                } else if (activeSession) {
-                    // Brilliant dual-TTL diff: activeSession survived because it has 24h TTL, but unauthData expired perfectly at 30m! OVERSTAY detected instantly in RAM.
+                if (activeSession) {
                     const duration = Math.round((new Date(ctxBase.scanTime) - new Date(activeSession.entryTime)) / 1000);
                     await tx.entryExitLog.update({ where: { id: activeSession.logId }, data: { logType: "EXIT", exitTime: ctxBase.scanTime, vehicleDuration: duration, cameraId: camera.id, ocrConfidence: ctxBase.confScore, modelConfidence: ctxBase.modelConf } });
-                    await tx.alert.create({ data: { alertType: "OVERSTAY", description: `Unverified vehicle exited. Session heavily exceeded 30m timeframe (${duration}s).`, rawPlate: ctxBase.rawPlate, cameraId: camera.id, logId: activeSession.logId } });
+                    
+                    if (duration > 1800) {
+                        await broadcastAlert(tx, { alertType: "OVERSTAY", description: `Unverified vehicle exited. Session exceeded 30m timeframe (${duration}s).`, rawPlate: ctxBase.rawPlate, cameraId: camera.id, logId: activeSession.logId });
+                    }
                     redis.del(activeKey).catch(() => {});
                 } else {
-                    // Redis intentionally dropped it after exactly 30 minutes to save RAM. Safely recover the old session from PostgreSQL.
                     const dbSession = await tx.entryExitLog.findFirst({ where: { vehicleNoHash, exitTime: null, logType: "ENTRY" }, orderBy: { entryTime: "desc" } });
 
                     if (dbSession) {
                         const duration = Math.round((new Date(ctxBase.scanTime) - new Date(dbSession.entryTime)) / 1000);
                         await tx.entryExitLog.update({ where: { id: dbSession.id }, data: { logType: "EXIT", exitTime: ctxBase.scanTime, vehicleDuration: duration, cameraId: camera.id, ocrConfidence: ctxBase.confScore, modelConfidence: ctxBase.modelConf } });
-                        await tx.alert.create({ data: { alertType: "OVERSTAY", description: `Unverified vehicle exited (Redis recovered). Session heavily exceeded 30m timeframe (${duration}s).`, rawPlate: ctxBase.rawPlate, cameraId: camera.id, logId: dbSession.id } });
+                        if (duration > 1800) {
+                            await broadcastAlert(tx, { alertType: "OVERSTAY", description: `Unverified vehicle exited (Redis recovered). Session exceeded 30m timeframe (${duration}s).`, rawPlate: ctxBase.rawPlate, cameraId: camera.id, logId: dbSession.id });
+                        }
                     } else {
-                        // Truly a ghost car! It literally never entered at the gate.
                         const anomalyLog = await tx.entryExitLog.create({
                             data: { ...buildBaseLogData({ cameraId: camera.id, vehicleNo, vehicleNoHash, vehicleId: null, rawPlate: ctxBase.rawPlate, confScore: ctxBase.confScore, modelConf: ctxBase.modelConf, isAuthorized: false, scanTime: ctxBase.scanTime }), logType: "ORPHAN" }
                         });
-                        await tx.alert.create({ data: { alertType: "EXIT_WITHOUT_ENTRY", description: `Unverified vehicle exited without an active ENTRY session.`, rawPlate: ctxBase.rawPlate, cameraId: camera.id, logId: anomalyLog.id } });
+                        await broadcastAlert(tx, { alertType: "EXIT_WITHOUT_ENTRY", description: `Unverified vehicle exited without an active ENTRY session.`, rawPlate: ctxBase.rawPlate, cameraId: camera.id, logId: anomalyLog.id });
                     }
                 }
             }
@@ -276,4 +246,21 @@ export async function processScanJob(jobData) {
     } finally {
         if (lock) await lock.release().catch(() => {});
     }
+}
+
+export async function processOverstayBomb(jobData) {
+    const { logId, rawPlate } = jobData;
+    
+    await prisma.$transaction(async (tx) => {
+        const dbSession = await tx.entryExitLog.findUnique({ where: { id: logId } });
+        if (!dbSession || dbSession.exitTime !== null) return; 
+
+        await broadcastAlert(tx, {
+            alertType: "ACTIVE_OVERSTAY_ALARM",
+            description: `Unverified Vehicle gracefully exceeded 30 minutes and is still currently physically inside the campus!`,
+            rawPlate,
+            cameraId: dbSession.cameraId,
+            logId
+        });
+    });
 }
