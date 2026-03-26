@@ -14,6 +14,7 @@ const router = Router();
 // ── Edge device route ──────────────────────────────────────────────────────────
 // Authenticated by shared API key (X-Edge-Api-Key header), NOT a user JWT.
 // Edge devices (cameras running YOLO + Flask) call this when a plate is detected.
+
 // router.post("/", verifyEdgeApiKey, processScan); // for production   
 router.post("/", processScan); // for development
 
