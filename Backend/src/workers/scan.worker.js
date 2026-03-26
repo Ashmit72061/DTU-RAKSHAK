@@ -1,9 +1,9 @@
 import { Worker } from "bullmq";
 import redis from "../models/redis.js";
-import { processScanJob } from "../services/scan.service.js"; // We will build this highly optimized service next
+import { processScanJob } from "../services/scan.service.js";
 
 export const scanWorker = new Worker("ScanQueue", async (job) => {
-    console.log(`[Worker] Processing scan job ${job.id} for vehicle ${job.data.vehicle_no}`);
+    console.log(`[Worker] Processing scan job ${job.id} for vehicle ${job.data.vehicleNo}`);
     try {
         await processScanJob(job.data);
     } catch (error) {

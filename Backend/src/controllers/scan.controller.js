@@ -31,8 +31,8 @@ export const processScan = asyncHandler(async (req, res) => {
             vehicleNo,
             rawPlate,
             scanTime,
-            confidence: confidence ? parseFloat(confidence) : null,
-            model_confidence: model_confidence ? parseFloat(model_confidence) : null
+            ocrConfidence: confidence ? parseFloat(confidence) : null,
+            modelConfidence: model_confidence ? parseFloat(model_confidence) : null
         }, 
         { jobId }
     );
