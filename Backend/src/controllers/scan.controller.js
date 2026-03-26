@@ -150,3 +150,97 @@ export const getLogsByVehicle = asyncHandler(async (req, res) => {
         unauthStatus:     unauthData ? JSON.parse(unauthData) : null,
     }, "Vehicle logs fetched"));
 });
+
+//  GET /api/v1/scan/entry-path/:entryId
+//  Fetch tracking path for a specific entry session
+export const getEntryPath = asyncHandler(async (req, res) => {
+    const { entryId } = req.params;
+    if (!entryId) throw new ApiError(StatusCodes.BAD_REQUEST, "entryId is required");
+
+    const cacheKey = `entryPath:v2:${entryId}`;
+    const cachedPath = await redis.get(cacheKey);
+    
+    // Check Redis cache
+    if (cachedPath) {
+        return res.status(StatusCodes.OK).json(
+            new ApiResponse(StatusCodes.OK, { entryId, path: JSON.parse(cachedPath) }, "Path fetched from cache")
+        );
+    }
+
+    // Fetch EntryExitLog and its sightings ordered by timestamp ascending
+    const entryObj = await prisma.entryExitLog.findUnique({
+        where: { id: entryId },
+        include: { 
+            camera: true,
+            sightings: {
+                orderBy: { timestamp: 'asc' },
+                include: { camera: true }
+            }
+        }
+    });
+
+    if (!entryObj) {
+        return res.status(StatusCodes.OK).json(
+            new ApiResponse(StatusCodes.OK, { entryId, path: [] }, "No path data found")
+        );
+    }
+
+    const path = [];
+    let lastCameraId = null;
+
+    // 1. Add the initial entry node if possible
+    if (entryObj.camera && entryObj.logType === "ENTRY") {
+        path.push({
+            lat: entryObj.camera.lat,
+            lng: entryObj.camera.long,
+            timestamp: entryObj.entryTime,
+            cameraId: entryObj.cameraId,
+            cameraLocation: entryObj.camera.cameraLocation,
+            type: "ENTRY"
+        });
+        lastCameraId = entryObj.cameraId;
+    }
+
+    // 2. Append all interior sightings
+    for (const s of entryObj.sightings) {
+        if (!s.camera) continue;
+        
+        path.push({
+            lat: s.camera.lat,
+            lng: s.camera.long,
+            timestamp: s.timestamp,
+            cameraId: s.cameraId,
+            cameraLocation: s.camera.cameraLocation,
+            type: "SIGHTING"
+        });
+        
+        lastCameraId = s.cameraId;
+    }
+
+    // 3. If it's an EXIT log, the primary camera is actually the Exit Gate!
+    if (entryObj.logType === "EXIT" && entryObj.camera) {
+        if (entryObj.cameraId !== lastCameraId) {
+            path.push({
+                lat: entryObj.camera.lat,
+                lng: entryObj.camera.long,
+                timestamp: entryObj.exitTime || entryObj.entryTime,
+                cameraId: entryObj.cameraId,
+                cameraLocation: entryObj.camera.cameraLocation,
+                type: "EXIT"
+            });
+        } else {
+            // Overrode last sighting camera with exit status
+            if (path.length > 0) {
+                path[path.length - 1].type = "EXIT";
+                path[path.length - 1].timestamp = entryObj.exitTime || path[path.length - 1].timestamp;
+            }
+        }
+    }
+
+    // Cache the result for 10 minutes (600 seconds)
+    await redis.setex(cacheKey, 600, JSON.stringify(path));
+
+    return res.status(StatusCodes.OK).json(
+        new ApiResponse(StatusCodes.OK, { entryId, path }, "Path fetched from Database")
+    );
+});

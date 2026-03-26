@@ -4,6 +4,7 @@ import {
     getLogs,
     getActiveLogs,
     getLogsByVehicle,
+    getEntryPath,
 } from "../controllers/scan.controller.js";
 import verifyJWT from "../middlewares/auth.middleware.js";
 import verifyEdgeApiKey from "../middlewares/edgeAuth.middleware.js";
@@ -20,5 +21,6 @@ router.post("/", verifyEdgeApiKey, processScan);
 router.get("/logs", verifyJWT, getLogs);               // ?page&limit&authorized&from&to&cameraId&logType
 router.get("/logs/active", verifyJWT, getActiveLogs);
 router.get("/logs/:vehicleNo", verifyJWT, getLogsByVehicle);      // ?from&to for date range
+router.get("/entry-path/:entryId", verifyJWT, getEntryPath);
 
 export default router;

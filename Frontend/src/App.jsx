@@ -11,6 +11,7 @@ import Dashboard from './pages/Dashboard';
 import Vehicles from './pages/Vehicles';
 import Cameras from './pages/Cameras';
 import Logs from './pages/Logs';
+import LiveMap from './pages/LiveMap';
 
 function PrivateLayout({ children }) {
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -62,6 +63,9 @@ export default function App() {
         } />
         <Route path="/logs" element={
           <RequireAuth><PrivateLayout><Logs /></PrivateLayout></RequireAuth>
+        } />
+        <Route path="/live-map" element={
+          <RequireAuth><PrivateLayout><LiveMap /></PrivateLayout></RequireAuth>
         } />
         <Route path="/change-password" element={
           <RequireAuth><PrivateLayout><ChangePassword /></PrivateLayout></RequireAuth>

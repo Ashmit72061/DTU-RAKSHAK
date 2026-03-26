@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Search } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
 import { getLogs, getActiveLogs } from '../api';
 
 function fmt(seconds) {
@@ -9,6 +10,7 @@ function fmt(seconds) {
 }
 
 export default function Logs() {
+  const navigate = useNavigate();
   const [tab, setTab] = useState('all'); // 'all' | 'active' | 'unauthorized'
   const [logs, setLogs] = useState([]);
   const [activeLogs, setActiveLogs] = useState([]);
@@ -101,7 +103,12 @@ export default function Logs() {
               {filtered.length === 0 ? (
                 <tr><td colSpan={7}><div className="empty"><p>No logs found</p></div></td></tr>
               ) : filtered.map(l => (
-                <tr key={l.id}>
+                <tr 
+                  key={l.id} 
+                  onClick={() => navigate(`/live-map?entryId=${l.id}`)} 
+                  className="clickable-row"
+                  title="Click to view path on map"
+                >
                   <td><span className="plate">{l.vehicleNo}</span></td>
                   <td>
                     <div className="cell-bold">{l.camera?.cameraLocation || '—'}</div>

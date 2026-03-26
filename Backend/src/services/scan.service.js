@@ -93,6 +93,9 @@ async function handleSighting({ tx, camera, vehicleNo, vehicleNoHash, vehicleId,
             rawPlate
         }
     });
+
+    // Invalidate the path cache for this session so the map UI fetches fresh data
+    redis.del(`entryPath:${activeSession.id}`).catch(() => {});
 }
 
 //  AUTHORIZED vehicle — ENTRY 

@@ -130,6 +130,8 @@ model Sighting {
   
   createdAt  DateTime @default(now())
 
+  @@index([sessionId])
+  @@index([cameraId])
   @@map("sightings")
 }
 
