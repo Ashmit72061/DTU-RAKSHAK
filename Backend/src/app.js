@@ -65,10 +65,11 @@ const cameraLimiter = rateLimit({
     message: { statusCode: 429, message: "Camera API Hardware Limit Exceeded.", success: false },
 });
 app.use("/api/v1/scan", cameraLimiter, scanRoutes);
-app.use("/api/v1/alerts", limiter, alertRoutes);
 
-// Real-time SSE alert streaming for the Dashboard
-app.get("/api/v1/alerts/stream", limiter, sseMiddleware);
+// Real-time SSE alert streaming — registered BEFORE alertRoutes to bypass JWT middleware
+// (browsers cannot send Authorization headers via EventSource)
+app.get("/api/v1/alerts/stream", sseMiddleware);
+app.use("/api/v1/alerts", limiter, alertRoutes);
 
 // ────────────────────── Global Error Handler ──────────────────────
 app.use(errorHandler);

@@ -40,22 +40,16 @@ export default function Alerts() {
     } catch { }
   }
 
-  // SSE — real-time alerts stream
+  // SSE — updates the table when a new alert fires (toast is handled globally in AlertToast)
   useEffect(() => {
-    const token = localStorage.getItem('accessToken');
-    const url = `${import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:2006/api/v1'}/alerts/stream`;
-
-    const es = new EventSource(url, { withCredentials: false });
-    eventSourceRef.current = es;
-
+    const es = new EventSource('/api/v1/alerts/stream');
     es.onmessage = (e) => {
       const data = JSON.parse(e.data);
       if (data.type === 'CONNECTED') return;
-      // Bump the live notification badge counter and reload current page
       setLiveCount(c => c + 1);
       load();
     };
-
+    es.onerror = () => es.close();
     return () => es.close();
   }, []);
 

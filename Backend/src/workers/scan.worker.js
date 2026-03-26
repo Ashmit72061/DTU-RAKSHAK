@@ -1,6 +1,19 @@
 import { Worker } from "bullmq";
-import redis from "../models/redis.js";
+import env from "../configs/env.config.js";
 import { processScanJob, processOverstayBomb } from "../services/scan.service.js";
+
+// BullMQ Worker MUST use its own dedicated Redis connection — never share the
+// app-wide ioredis singleton. Shared connections cause blocking command (BRPOPLPUSH)
+// conflicts that silently stop job processing after nodemon restarts.
+const redisUrl = new URL(env.redisUrl);
+
+const workerConnection = {
+    host: redisUrl.hostname,
+    port: parseInt(redisUrl.port) || 6379,
+    username: redisUrl.username || "default",
+    password: redisUrl.password || undefined,
+    maxRetriesPerRequest: null, // Required by BullMQ for blocking commands
+};
 
 export const scanWorker = new Worker("ScanQueue", async (job) => {
     try {
@@ -8,7 +21,7 @@ export const scanWorker = new Worker("ScanQueue", async (job) => {
             console.log(`[Worker] Processing scan job ${job.id} for vehicle ${job.data.vehicleNo}`);
             await processScanJob(job.data);
         } else if (job.name === "checkOverstayBomb") {
-            console.log(`[Worker] Executing Overstay Bomb evaluation ${job.id} for logId ${job.data.logId}`);
+            console.log(`[Worker] Executing Overstay Bomb ${job.id} for logId ${job.data.logId}`);
             await processOverstayBomb(job.data);
         }
     } catch (error) {
@@ -16,8 +29,8 @@ export const scanWorker = new Worker("ScanQueue", async (job) => {
         throw error; // Let BullMQ handle retries
     }
 }, {
-    connection: redis,
-    concurrency: 15, // Process up to 15 concurrent scans
+    connection: workerConnection,
+    concurrency: 15,
 });
 
 scanWorker.on("completed", (job) => {

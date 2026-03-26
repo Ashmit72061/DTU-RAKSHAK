@@ -91,16 +91,18 @@ export const getActiveLogs = asyncHandler(async (req, res) => {
         include: { camera: true, vehicle: true },
     });
 
-    // Enrich unverified logs with remaining allowed time from Redis
+    // Enrich unverified logs with remaining allowed time via math on activeSession
     const enriched = await Promise.all(logs.map(async (log) => {
         const safeLog = { ...log, vehicle: log.vehicle ? decryptVehicle(log.vehicle) : null };
 
         if (!log.isAuthorized) {
-            const unauthData = await redis.get(KEY_UNAUTH(log.vehicleNo));
-            if (unauthData) {
-                const { allowedUntil } = JSON.parse(unauthData);
-                const remaining = Math.max(0, Math.round((new Date(allowedUntil) - Date.now()) / 1000));
-                return { ...safeLog, allowedUntil, remainingSeconds: remaining, isOverdue: remaining === 0 };
+            const activeRaw = await redis.get(KEY_ACTIVE(log.vehicleNo));
+            if (activeRaw) {
+                const { entryTime } = JSON.parse(activeRaw);
+                const elapsed   = Math.round((Date.now() - new Date(entryTime)) / 1000);
+                const remaining = Math.max(0, 1800 - elapsed);
+                const allowedUntil = new Date(new Date(entryTime).getTime() + 1800 * 1000).toISOString();
+                return { ...safeLog, allowedUntil, remainingSeconds: remaining, isOverdue: elapsed > 1800 };
             }
         }
         return safeLog;
