@@ -24,6 +24,7 @@ app.use(
 );
 
 // ────────────────────── Rate Limiting ──────────────────────
+// Strict limiter for frontend dashboard and human interactions
 const limiter = rateLimit({
     windowMs: 15 * 60 * 1000, // 15 minutes
     max: 100,
@@ -31,7 +32,6 @@ const limiter = rateLimit({
     legacyHeaders: false,
     message: { statusCode: 429, message: "Too many requests, please try again later.", success: false },
 });
-app.use(limiter);
 
 // ────────────────────── Body Parsing ──────────────────────
 app.use(express.json({ limit: "10mb" }));
@@ -45,16 +45,24 @@ if (env.nodeEnv === "development") {
     app.use(morgan("combined"));
 }
 
-// ────────────────────── Health Check ──────────────────────
-app.get("/api/v1/health", (_req, res) => {
-    res.status(200).json(new ApiResponse(200, { status: "ok" }, "Server is healthy"));
-});
-
 // ────────────────────── Routes ──────────────────────
-app.use("/api/v1/auth",     authRoutes);
-app.use("/api/v1/vehicles", vehicleRoutes);
-app.use("/api/v1/cameras",  cameraRoutes);
-app.use("/api/v1/scan",     scanRoutes);
+app.use("/api/v1/health",   limiter, (req, res) => res.status(200).json(new ApiResponse(200, { status: "ok" }, "Server is healthy")));
+
+app.use("/api/v1/auth",     limiter, authRoutes);
+app.use("/api/v1/vehicles", limiter, vehicleRoutes);
+app.use("/api/v1/cameras",  limiter, cameraRoutes);
+
+// Generous sanity-check limit for camera hardware
+// Prevents an infinite-loop bug on a camera from flooding Redis memory,
+// while remaining generously high enough (1,000/min) to never block rush hour campus traffic.
+const cameraLimiter = rateLimit({
+    windowMs: 1 * 60 * 1000, 
+    max: 1000,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { statusCode: 429, message: "Camera API Hardware Limit Exceeded.", success: false },
+});
+app.use("/api/v1/scan",     cameraLimiter, scanRoutes);
 
 // ────────────────────── Global Error Handler ──────────────────────
 app.use(errorHandler);
