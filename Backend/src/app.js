@@ -9,8 +9,10 @@ import authRoutes from "./routes/auth.routes.js";
 import vehicleRoutes from "./routes/vehicle.routes.js";
 import cameraRoutes from "./routes/camera.routes.js";
 import scanRoutes from "./routes/scan.routes.js";
+import alertRoutes from "./routes/alert.routes.js";
 import errorHandler from "./middlewares/error.middleware.js";
 import ApiResponse from "./utils/ApiResponse.js";
+import { sseMiddleware } from "./utils/sse.js";
 
 const app = express();
 
@@ -62,7 +64,11 @@ const cameraLimiter = rateLimit({
     legacyHeaders: false,
     message: { statusCode: 429, message: "Camera API Hardware Limit Exceeded.", success: false },
 });
-app.use("/api/v1/scan",     cameraLimiter, scanRoutes);
+app.use("/api/v1/scan", cameraLimiter, scanRoutes);
+app.use("/api/v1/alerts", limiter, alertRoutes);
+
+// Real-time SSE alert streaming for the Dashboard
+app.get("/api/v1/alerts/stream", limiter, sseMiddleware);
 
 // ────────────────────── Global Error Handler ──────────────────────
 app.use(errorHandler);

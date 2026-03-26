@@ -6,7 +6,7 @@ import ApiResponse from "../utils/ApiResponse.js";
 import asyncHandler from "../utils/asyncHandler.js";
 import { normalisePlate } from "../utils/plate.js";
 import { hashField, decryptVehicle } from "../utils/crypto.util.js";
-import { KEY_ACTIVE, KEY_UNAUTH } from "../services/scan.service.js";
+import { KEY_ACTIVE } from "../services/scan.service.js";
 import { scanQueue } from "../utils/queue.js";
 import crypto from "crypto";
 
@@ -31,8 +31,8 @@ export const processScan = asyncHandler(async (req, res) => {
             vehicleNo,
             rawPlate,
             scanTime,
-            confidence: confidence ? parseFloat(confidence) : null,
-            model_confidence: model_confidence ? parseFloat(model_confidence) : null
+            ocrConfidence: confidence ? parseFloat(confidence) : null,
+            modelConfidence: model_confidence ? parseFloat(model_confidence) : null
         }, 
         { jobId }
     );

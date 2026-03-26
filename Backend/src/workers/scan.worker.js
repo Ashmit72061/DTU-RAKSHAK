@@ -1,11 +1,16 @@
 import { Worker } from "bullmq";
 import redis from "../models/redis.js";
-import { processScanJob } from "../services/scan.service.js"; // We will build this highly optimized service next
+import { processScanJob, processOverstayBomb } from "../services/scan.service.js";
 
 export const scanWorker = new Worker("ScanQueue", async (job) => {
-    console.log(`[Worker] Processing scan job ${job.id} for vehicle ${job.data.vehicle_no}`);
     try {
-        await processScanJob(job.data);
+        if (job.name === "processScanJob") {
+            console.log(`[Worker] Processing scan job ${job.id} for vehicle ${job.data.vehicleNo}`);
+            await processScanJob(job.data);
+        } else if (job.name === "checkOverstayBomb") {
+            console.log(`[Worker] Executing Overstay Bomb evaluation ${job.id} for logId ${job.data.logId}`);
+            await processOverstayBomb(job.data);
+        }
     } catch (error) {
         console.error(`[Worker] Error processing job ${job.id}:`, error.message);
         throw error; // Let BullMQ handle retries
