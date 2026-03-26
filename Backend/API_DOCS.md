@@ -19,16 +19,92 @@
 ## 🔓 Auth — `/api/v1/auth`
 
 | Method | Endpoint | Body | Returns |
-|--------|----------|------|---------|
+|--------|----------|------|----------|
 | GET | `/health` | — | `{ status: "ok" }` |
 | POST | `/auth/signup` | `{ email, password }` | `201` OTP sent |
 | POST | `/auth/signup/verify-otp` | `{ email, otp }` | `accessToken` + cookie |
 | POST | `/auth/signin` | `{ email, password }` | `200` OTP sent |
 | POST | `/auth/signin/verify-otp` | `{ email, otp }` | `accessToken` + cookie |
 | POST | `/auth/refresh-token` | cookie / `{ refreshToken }` | new `accessToken` |
+| POST | `/auth/forgot-password` | `{ email }` | `200` OTP sent |
+| POST | `/auth/forgot-password/verify-otp` | `{ email, otp, newPassword }` | `200` password reset |
+| POST | `/auth/resend-otp` | `{ email, type }` | `200` OTP resent |
 | POST 🔒 | `/auth/logout` | — | clears cookie |
+| POST 🔒 | `/auth/update-password` | `{ currentPassword, newPassword }` | `200` password updated |
 
-**2-step flow:** credentials → OTP email → verify-otp → get token
+**2-step signup/signin flow:** credentials → OTP email → verify-otp → get token
+
+---
+
+### POST `/auth/forgot-password`
+
+Initiates the forgot-password flow. Always returns `200` to prevent email enumeration — an OTP is only actually sent if the email is registered and verified.
+
+**Request body:**
+```json
+{ "email": "user@dtu.ac.in" }
+```
+
+**Response `200`:**
+```json
+{ "statusCode": 200, "data": { "email": "user@dtu.ac.in" }, "message": "If this email is registered, an OTP will be sent.", "success": true }
+```
+
+---
+
+### POST `/auth/forgot-password/verify-otp`
+
+Verifies the forgot-password OTP and resets the password in one step. On success, **all active sessions are invalidated** (refresh token cleared from DB).
+
+**Request body:**
+```json
+{ "email": "user@dtu.ac.in", "otp": "483920", "newPassword": "NewPass@123" }
+```
+
+**Response `200`:**
+```json
+{ "statusCode": 200, "data": null, "message": "Password reset successfully. Please sign in again.", "success": true }
+```
+
+> **Note:** After a successful password reset, the user must sign in again — all previous `refresh_token` cookies are invalid.
+
+---
+
+### POST `/auth/resend-otp`
+
+Resends a fresh OTP for any pending flow. Overwrites the existing Redis OTP key with a new OTP and TTL.
+
+**Request body:**
+```json
+{ "email": "user@dtu.ac.in", "type": "SIGNUP" }
+```
+
+> `type` must be one of: `"SIGNUP"` | `"SIGNIN"` | `"FORGOT_PASSWORD"`
+
+**Response `200`:**
+```json
+{ "statusCode": 200, "data": { "email": "user@dtu.ac.in" }, "message": "OTP resent successfully. Please check your email.", "success": true }
+```
+
+> Always returns `200` even if the email is not found (prevents enumeration). Returns `403` if `type` is `"SIGNIN"` and the account is not yet verified.
+
+---
+
+### POST `/auth/update-password` 🔒
+
+Changes the password for the **currently logged-in user**. Requires the current password for verification. On success, all other sessions are invalidated and the current session's cookie is cleared.
+
+**Request body:**
+```json
+{ "currentPassword": "OldPass@123", "newPassword": "NewPass@456" }
+```
+
+**Response `200`:**
+```json
+{ "statusCode": 200, "data": null, "message": "Password updated successfully. Please sign in again.", "success": true }
+```
+
+> **Rules:** `currentPassword` ≠ `newPassword`. Returns `401` if `currentPassword` is wrong.
 
 ---
 
@@ -36,12 +112,14 @@
 
 | Method | Endpoint | Notes |
 |--------|----------|-------|
-| GET | `/vehicles?search=DL&page=1&limit=15` | Paginated list |
+| GET | `/vehicles?search=DL&page=1&limit=15` | Paginated list (max 50) |
 | POST | `/vehicles` | Create registered vehicle |
 | POST | `/vehicles/bulk` | Bulk import from CSV |
 | GET | `/vehicles/:vehicleNo` | Single vehicle  |
 | PUT | `/vehicles/:vehicleNo` | Update vehicle |
 | DELETE | `/vehicles/:vehicleNo` | Delete vehicle |
+
+> **Security Note:** `vehicleNo` and `mobileNo` are stored securely with AES-256-GCM encryption and decrypted on the fly. Because of this, the `search` query parameter cannot do partial matches on plate numbers (`vehicleNo`) — you can search by `name`, `stickerNo`, or `dept`. For an exact vehicle lookup, use `GET /vehicles/:vehicleNo`.
 
 **POST / PUT body:**
 ```json

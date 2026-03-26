@@ -22,6 +22,15 @@ model User {
 }
 
 // ── Registered Vehicle (authorised sticker holders) ──────────────────────────
+//
+// Sensitive fields are stored encrypted (AES-256-GCM) + hashed (SHA-256):
+//   vehicleNo   → raw plate stored as JSON-encoded cipher blob
+//   vehicleNoHash → SHA-256(normalised plate) — used for all lookups/joins (@unique)
+//   mobileNo    → raw phone stored as JSON-encoded cipher blob
+//   mobileNoHash → SHA-256(normalised phone) — indexed for potential future queries
+//
+// Decryption happens in crypto.util.js → decryptVehicle().
+// The frontend never receives encrypted blobs.
 model Vehicle {
   id          String   @id @default(uuid())
   name        String
@@ -30,14 +39,19 @@ model Vehicle {
   dateOfIssue DateTime
   vehicleType String              // "2W" | "4W" | "Heavy" | "Electric"
   stickerNo   String   @unique
-  vehicleNo   String   @unique
-  mobileNo    String
+
+  vehicleNo     String            // AES-256-GCM encrypted blob (JSON: {iv, content, tag})
+  vehicleNoHash String?  @unique  // SHA-256(normalised plate) — all lookups use this
+
+  mobileNo     String             // AES-256-GCM encrypted blob (JSON: {iv, content, tag})
+  mobileNoHash String?            // SHA-256(normalised phone)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   logs EntryExitLog[]
 
+  @@index([mobileNoHash])
   @@map("vehicles")
 }
 
@@ -64,19 +78,21 @@ model Camera {
 //   EXIT     – vehicle exited campus  (gate camera, closes an ENTRY log)
 //   SIGHTING – vehicle spotted at interior/area camera (no entry/exit impact)
 //
-// vehicleNo  – raw plate string, ALWAYS present (no FK — unregistered vehicles must be stored too)
-// vehicleId  – FK to vehicles.id, only set when the vehicle is registered/authorized
+// vehicleNo     – raw plate string from edge device (kept as audit trail, not encrypted)
+// vehicleNoHash – SHA-256(normalised plate) — used for filtering/joining by plate
+// vehicleId     – FK to vehicles.id, only set when the vehicle is registered/authorized
 
 model EntryExitLog {
   id       String @id @default(uuid())
   cameraId String
   camera   Camera @relation(fields: [cameraId], references: [id])
 
-  vehicleNo String   // plate number as received from edge device (e.g. "DL3CAF0001")
-  vehicleId String?  // FK → vehicles.id, null for unregistered vehicles
-  vehicle   Vehicle? @relation(fields: [vehicleId], references: [id])
+  vehicleNo     String   // plate number as received from edge device (e.g. "DL3CAF0001")
+  vehicleNoHash String?  // SHA-256(normalised plate) — for plate-based queries
+  vehicleId     String?  // FK → vehicles.id, null for unregistered vehicles
+  vehicle       Vehicle? @relation(fields: [vehicleId], references: [id])
 
-  logType         String    @default("ENTRY")  // "ENTRY" | "EXIT" | "ORPHAN"
+  logType         String    @default("ENTRY")  // "ENTRY" | "EXIT" | "SIGHTING"
   ocrConfidence   Float?                        // OCR (Text reading) confidence
   modelConfidence Float?                        // YOLO (Car detection) confidence
   rawPlate        String                        // raw OCR string
@@ -90,6 +106,7 @@ model EntryExitLog {
 
   sightings Sighting[]
 
+  @@index([vehicleNoHash])
   @@map("entry_exit_logs")
 }
 

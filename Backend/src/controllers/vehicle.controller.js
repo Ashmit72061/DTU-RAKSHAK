@@ -4,9 +4,32 @@ import prisma from "../models/prisma.js";
 import ApiError from "../utils/ApiError.js";
 import ApiResponse from "../utils/ApiResponse.js";
 import asyncHandler from "../utils/asyncHandler.js";
+import {
+    encrypt,
+    hashField,
+    normalizePhone,
+    normalizeVehicleNo,
+    decryptVehicle,
+} from "../utils/crypto.util.js";
 
-const VEHICLE_REQUIRED = ["name", "fathersName", "dept", "dateOfIssue", "vehicleType", "stickerNo", "vehicleNo", "mobileNo"];
+const VEHICLE_REQUIRED   = ["name", "fathersName", "dept", "dateOfIssue", "vehicleType", "stickerNo", "vehicleNo", "mobileNo"];
 const VALID_VEHICLE_TYPES = ["2W", "4W", "Heavy", "Electric"];
+const MAX_LIMIT           = 50;
+
+// ── Shared helper: build the encrypted + hashed data object for a vehicle write ──
+function buildSensitiveFields(rawVehicleNo, rawMobileNo) {
+    const normalVehicleNo = normalizeVehicleNo(rawVehicleNo);
+    const normalMobileNo  = normalizePhone(rawMobileNo);
+
+    return {
+        vehicleNo:     JSON.stringify(encrypt(normalVehicleNo)),
+        vehicleNoHash: hashField(normalVehicleNo),
+        mobileNo:      JSON.stringify(encrypt(normalMobileNo)),
+        mobileNoHash:  hashField(normalMobileNo),
+        // Return the normalized plate too — used internally (e.g. Redis keys)
+        _normalizedVehicleNo: normalVehicleNo,
+    };
+}
 
 // ── POST /api/v1/vehicles ─────────────────────────────────────────────────────
 export const createVehicle = asyncHandler(async (req, res) => {
@@ -16,8 +39,15 @@ export const createVehicle = asyncHandler(async (req, res) => {
         throw new ApiError(StatusCodes.BAD_REQUEST, "All fields are required");
     }
 
+    if (!VALID_VEHICLE_TYPES.includes(vehicleType)) {
+        throw new ApiError(StatusCodes.BAD_REQUEST, `Invalid vehicleType — must be one of: ${VALID_VEHICLE_TYPES.join(", ")}`);
+    }
+
+    const sensitive = buildSensitiveFields(vehicleNo, mobileNo);
+
+    // Duplicate check via hash (vehicleNo) or stickerNo (plaintext)
     const existing = await prisma.vehicle.findFirst({
-        where: { OR: [{ vehicleNo: vehicleNo.toUpperCase().replace(/\s/g, "") }, { stickerNo }] },
+        where: { OR: [{ vehicleNoHash: sensitive.vehicleNoHash }, { stickerNo }] },
     });
     if (existing) {
         throw new ApiError(StatusCodes.CONFLICT, "Vehicle number or sticker number already registered");
@@ -28,87 +58,107 @@ export const createVehicle = asyncHandler(async (req, res) => {
             name,
             fathersName,
             dept,
-            dateOfIssue: new Date(dateOfIssue),
+            dateOfIssue:   new Date(dateOfIssue),
             vehicleType,
             stickerNo,
-            vehicleNo: vehicleNo.toUpperCase().replace(/\s/g, ""),
-            mobileNo,
+            vehicleNo:     sensitive.vehicleNo,
+            vehicleNoHash: sensitive.vehicleNoHash,
+            mobileNo:      sensitive.mobileNo,
+            mobileNoHash:  sensitive.mobileNoHash,
         },
     });
 
     return res.status(StatusCodes.CREATED).json(
-        new ApiResponse(StatusCodes.CREATED, vehicle, "Vehicle registered successfully")
+        new ApiResponse(StatusCodes.CREATED, decryptVehicle(vehicle), "Vehicle registered successfully")
     );
 });
 
 // ── GET /api/v1/vehicles ──────────────────────────────────────────────────────
 export const getVehicles = asyncHandler(async (req, res) => {
-    const { search, page = 1, limit = 20 } = req.query;
-    const skip = (parseInt(page) - 1) * parseInt(limit);
+    const page  = parseInt(req.query.page)  || 1;
+    const limit = Math.min(parseInt(req.query.limit) || 20, MAX_LIMIT); // cap at 50
+    const skip  = (page - 1) * limit;
+    const { search } = req.query;
 
+    // vehicleNo is encrypted — only name, stickerNo, dept remain searchable with LIKE.
+    // For an exact vehicleNo lookup, use GET /vehicles/:vehicleNo instead.
     const where = search
         ? {
             OR: [
-                { vehicleNo: { contains: search.toUpperCase() } },
-                { name: { contains: search, mode: "insensitive" } },
+                { name:      { contains: search, mode: "insensitive" } },
                 { stickerNo: { contains: search, mode: "insensitive" } },
-                { dept: { contains: search, mode: "insensitive" } },
+                { dept:      { contains: search, mode: "insensitive" } },
             ],
         }
         : {};
 
     const [vehicles, total] = await Promise.all([
-        prisma.vehicle.findMany({ where, skip, take: parseInt(limit), orderBy: { createdAt: "desc" } }),
+        prisma.vehicle.findMany({ where, skip, take: limit, orderBy: { createdAt: "desc" } }),
         prisma.vehicle.count({ where }),
     ]);
 
     return res.status(StatusCodes.OK).json(
-        new ApiResponse(StatusCodes.OK, { vehicles, total, page: parseInt(page), limit: parseInt(limit) }, "Vehicles fetched")
+        new ApiResponse(StatusCodes.OK, {
+            vehicles: vehicles.map(decryptVehicle),
+            total,
+            page,
+            limit,
+        }, "Vehicles fetched")
     );
 });
 
 // ── GET /api/v1/vehicles/:vehicleNo ──────────────────────────────────────────
 export const getVehicle = asyncHandler(async (req, res) => {
-    const vehicleNo = req.params.vehicleNo.toUpperCase().replace(/\s/g, "");
+    const vehicleNoHash = hashField(normalizeVehicleNo(req.params.vehicleNo));
 
-    const vehicle = await prisma.vehicle.findUnique({ where: { vehicleNo } });
+    const vehicle = await prisma.vehicle.findUnique({ where: { vehicleNoHash } });
     if (!vehicle) throw new ApiError(StatusCodes.NOT_FOUND, "Vehicle not found");
 
     return res.status(StatusCodes.OK).json(
-        new ApiResponse(StatusCodes.OK, vehicle, "Vehicle fetched")
+        new ApiResponse(StatusCodes.OK, decryptVehicle(vehicle), "Vehicle fetched")
     );
 });
 
 // ── PUT /api/v1/vehicles/:vehicleNo ──────────────────────────────────────────
 export const updateVehicle = asyncHandler(async (req, res) => {
-    const vehicleNo = req.params.vehicleNo.toUpperCase().replace(/\s/g, "");
+    const vehicleNoHash = hashField(normalizeVehicleNo(req.params.vehicleNo));
 
-    const exists = await prisma.vehicle.findUnique({ where: { vehicleNo } });
+    const exists = await prisma.vehicle.findUnique({ where: { vehicleNoHash } });
     if (!exists) throw new ApiError(StatusCodes.NOT_FOUND, "Vehicle not found");
 
     const allowed = ["name", "fathersName", "dept", "dateOfIssue", "vehicleType", "stickerNo", "mobileNo"];
     const data = {};
+
     for (const key of allowed) {
-        if (req.body[key] !== undefined) {
-            data[key] = key === "dateOfIssue" ? new Date(req.body[key]) : req.body[key];
+        if (req.body[key] === undefined) continue;
+
+        if (key === "dateOfIssue") {
+            data.dateOfIssue = new Date(req.body[key]);
+        } else if (key === "mobileNo") {
+            // Re-encrypt and rehash if phone number is being updated
+            const normalMobileNo  = normalizePhone(req.body.mobileNo);
+            data.mobileNo     = JSON.stringify(encrypt(normalMobileNo));
+            data.mobileNoHash = hashField(normalMobileNo);
+        } else {
+            data[key] = req.body[key];
         }
     }
 
-    const vehicle = await prisma.vehicle.update({ where: { vehicleNo }, data });
+    const vehicle = await prisma.vehicle.update({ where: { vehicleNoHash }, data });
 
     return res.status(StatusCodes.OK).json(
-        new ApiResponse(StatusCodes.OK, vehicle, "Vehicle updated successfully")
+        new ApiResponse(StatusCodes.OK, decryptVehicle(vehicle), "Vehicle updated successfully")
     );
 });
 
 // ── DELETE /api/v1/vehicles/:vehicleNo ────────────────────────────────────────
 export const deleteVehicle = asyncHandler(async (req, res) => {
-    const vehicleNo = req.params.vehicleNo.toUpperCase().replace(/\s/g, "");
+    const vehicleNoHash = hashField(normalizeVehicleNo(req.params.vehicleNo));
 
-    const exists = await prisma.vehicle.findUnique({ where: { vehicleNo } });
+    const exists = await prisma.vehicle.findUnique({ where: { vehicleNoHash } });
     if (!exists) throw new ApiError(StatusCodes.NOT_FOUND, "Vehicle not found");
 
-    await prisma.vehicle.delete({ where: { vehicleNo } });
+    await prisma.vehicle.delete({ where: { vehicleNoHash } });
 
     return res.status(StatusCodes.OK).json(
         new ApiResponse(StatusCodes.OK, null, "Vehicle deleted successfully")
@@ -124,7 +174,7 @@ export const bulkImportVehicles = asyncHandler(async (req, res) => {
     let rows;
     try {
         rows = parse(req.file.buffer, {
-            columns: true,           // use first row as column names
+            columns: true,
             skip_empty_lines: true,
             trim: true,
         });
@@ -138,12 +188,12 @@ export const bulkImportVehicles = asyncHandler(async (req, res) => {
         );
     }
 
-    const errors = [];
+    const errors       = [];
     const validRecords = [];
-    const seen = new Set(); // track duplicates within this upload
+    const seenHashes   = new Set(); // intra-file duplicate detection via hash
 
     for (let i = 0; i < rows.length; i++) {
-        const row = rows[i];
+        const row    = rows[i];
         const rowNum = i + 2; // +2: 1-indexed + header row
 
         // --- required field check ---
@@ -159,16 +209,6 @@ export const bulkImportVehicles = asyncHandler(async (req, res) => {
             continue;
         }
 
-        // --- normalise vehicleNo ---
-        const vehicleNo = row.vehicleNo.toUpperCase().replace(/\s/g, "");
-
-        // --- intra-file duplicate check ---
-        if (seen.has(vehicleNo)) {
-            errors.push({ row: rowNum, reason: `Duplicate vehicleNo "${vehicleNo}" within the uploaded file` });
-            continue;
-        }
-        seen.add(vehicleNo);
-
         // --- date validation ---
         const dateOfIssue = new Date(row.dateOfIssue);
         if (isNaN(dateOfIssue.getTime())) {
@@ -176,19 +216,31 @@ export const bulkImportVehicles = asyncHandler(async (req, res) => {
             continue;
         }
 
+        // --- normalise + hash + encrypt sensitive fields ---
+        const sensitive = buildSensitiveFields(row.vehicleNo.trim(), row.mobileNo.trim());
+
+        // --- intra-file duplicate check (by hash) ---
+        if (seenHashes.has(sensitive.vehicleNoHash)) {
+            errors.push({ row: rowNum, reason: `Duplicate vehicleNo "${sensitive._normalizedVehicleNo}" within the uploaded file` });
+            continue;
+        }
+        seenHashes.add(sensitive.vehicleNoHash);
+
         validRecords.push({
-            name: row.name.trim(),
-            fathersName: row.fathersName.trim(),
-            dept: row.dept.trim(),
+            name:          row.name.trim(),
+            fathersName:   row.fathersName.trim(),
+            dept:          row.dept.trim(),
             dateOfIssue,
-            vehicleType: row.vehicleType.trim(),
-            stickerNo: row.stickerNo.trim(),
-            vehicleNo,
-            mobileNo: row.mobileNo.trim(),
+            vehicleType:   row.vehicleType.trim(),
+            stickerNo:     row.stickerNo.trim(),
+            vehicleNo:     sensitive.vehicleNo,
+            vehicleNoHash: sensitive.vehicleNoHash,
+            mobileNo:      sensitive.mobileNo,
+            mobileNoHash:  sensitive.mobileNoHash,
         });
     }
 
-    // --- bulk insert (DB-level duplicates are silently skipped) ---
+    // skipDuplicates guards against vehicleNoHash or stickerNo collisions with existing DB rows
     const result = await prisma.vehicle.createMany({
         data: validRecords,
         skipDuplicates: true,

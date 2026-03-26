@@ -15,7 +15,7 @@
     "prisma:studio": "prisma studio --schema=src/prisma/schema.prisma"
   },
   "dependencies": {
-    "@prisma/client": "6.19.2",
+    "@prisma/client": "^6.19.2",
     "bcrypt": "^6.0.0",
     "bullmq": "^5.71.1",
     "cookie-parser": "^1.4.7",

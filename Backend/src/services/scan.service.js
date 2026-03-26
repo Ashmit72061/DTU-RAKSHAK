@@ -1,242 +1,259 @@
 import prisma from "../models/prisma.js";
 import redis from "../models/redis.js";
 import redlock from "../utils/redlock.js";
+import { hashField } from "../utils/crypto.util.js";
 import { 
     ValidationError, 
-    LowConfidenceError, 
     CameraNotFoundError 
 } from "../utils/errors.js";
 
-const KEY_VEHICLE = (plate) => `vehicle:${plate}`;
-const KEY_CAMERA = (id) => `camera:${id}`;
+// ── Redis key helpers 
+export const KEY_VEHICLE = (plate) => `vehicle:${plate}`;   // auth cache  (24h)
+export const KEY_ACTIVE = (plate) => `active:${plate}`;    // current entry session
+export const KEY_UNAUTH = (plate) => `unauth:${plate}`;    // 30-min unauth window
+export const UNAUTH_TTL = 30 * 60;                         // 30 minutes in seconds
+export const VEHICLE_TTL = 24 * 60 * 60;                   // 24 hours in seconds
 
-const TTL_24H = 24 * 60 * 60; // 24 hours
+// ── Shared internal helpers 
+const buildBaseLogData = ({ cameraId, vehicleNo, vehicleNoHash, vehicleId, rawPlate, confScore, modelConf, isAuthorized, scanTime }) => ({
+    cameraId,
+    vehicleNo,          // Raw plate string kept for audit trail
+    vehicleNoHash,      // Hashed plate string for secure indexing/joins
+    vehicleId: vehicleId ?? null,
+    rawPlate,
+    ocrConfidence: confScore,
+    modelConfidence: modelConf,
+    isAuthorized,
+    vehicleCategory: isAuthorized ? "REGISTERED" : "UNVERIFIED",
+    entryTime: scanTime,
+});
 
-// 1. Validation Logic
-function validateInput(data) {
-    if (!data.camera_id || !data.vehicleNo) {
-        throw new ValidationError("Missing camera_id or vehicleNo in job data");
-    }
-    return data;
-}
+const clearUnauthSession = (unauthKey, activeKey) => Promise.all([redis.del(unauthKey), redis.del(activeKey)]);
 
-// 2. Confidence Logic
-function applyConfidenceLogic(confidence, model_confidence) {
-    const ocr = confidence || 0;
-    const model = model_confidence || 0;
-    
-    // If edge device provided no confidence score, automatically trust it
-    if (ocr === 0 && model === 0) return true; 
-
-    // Reject low confidence plates to prevent polluting the DB logs
-    if (ocr < 0.6 && model < 0.6) {
-        throw new LowConfidenceError(`Confidence too low. OCR: ${ocr}, Model: ${model}`);
-    }
-    return true;
-}
-
-// 3. Camera Fetching with Caching
 async function fetchCameraFromCache(cameraId) {
-    const cacheKey = KEY_CAMERA(cameraId);
+    const cacheKey = `camera:${cameraId}`;
     let cached = await redis.get(cacheKey);
-    
     if (cached) return JSON.parse(cached);
 
     const camera = await prisma.camera.findUnique({ where: { id: cameraId } });
-    if (!camera) throw new CameraNotFoundError(`Camera ${cameraId} not found in database`);
+    if (!camera) throw new CameraNotFoundError(`Camera ${cameraId} not found`);
 
-    // Only allow strictly typed cameras to prevent logical collisions
-    if (!["ENTRY", "EXIT", "SIGHTING"].includes(camera.cameraType)) {
-        throw new ValidationError(`Camera ${cameraId} has invalid config type: ${camera.cameraType}`);
-    }
-
-    await redis.setex(cacheKey, TTL_24H, JSON.stringify(camera));
+    await redis.setex(cacheKey, VEHICLE_TTL, JSON.stringify(camera));
     return camera;
 }
 
-// 4. Vehicle Resolution
-export async function resolveVehicle(vehicleNo) {
+// ── Vehicle auth: Redis → DB 
+async function resolveVehicle(vehicleNo) {
     const cacheKey = KEY_VEHICLE(vehicleNo);
-    const cached = await redis.get(cacheKey);
+    const cached   = await redis.get(cacheKey);
     if (cached) return JSON.parse(cached);
 
-    const dbVehicle = await prisma.vehicle.findUnique({ where: { vehicleNo } });
+    const vehicleNoHash = hashField(vehicleNo);
+    const dbVehicle     = await prisma.vehicle.findUnique({ where: { vehicleNoHash } });
+
     const payload = dbVehicle
         ? { isAuthorized: true, vehicleId: dbVehicle.id }
         : { isAuthorized: false, vehicleId: null };
 
-    await redis.setex(cacheKey, TTL_24H, JSON.stringify(payload));
+    await redis.setex(cacheKey, VEHICLE_TTL, JSON.stringify(payload));
     return payload;
 }
 
-// 5. Handlers
-async function handleEntry(camera, vehicleNo, vehicleInfo, rawPlate, conf, modelConf) {
-    return await prisma.$transaction(async (tx) => {
-        // Prevent duplicate active session
-        const existingActive = await tx.entryExitLog.findFirst({
-            where: { vehicleNo, exitTime: null, logType: "ENTRY" }
+// ── Handlers (Wrapped in transactions by orchestration) ──
+
+//  INTERIOR camera → log a SIGHTING only, no entry/exit gate logic
+async function handleSighting({ tx, camera, vehicleNo, vehicleNoHash, vehicleId, rawPlate, confScore, modelConf, isAuthorized, scanTime, cameraId }) {
+    let activeSession = await tx.entryExitLog.findFirst({
+        where: { vehicleNoHash, exitTime: null, logType: "ENTRY" },
+        orderBy: { entryTime: "desc" }
+    });
+
+    if (!activeSession) {
+        console.warn(`[Sighting] No active session for ${vehicleNo}. Creating ORPHAN session & Alert.`);
+        activeSession = await tx.entryExitLog.create({
+            data: { ...buildBaseLogData({ cameraId, vehicleNo, vehicleNoHash, vehicleId, rawPlate, confScore, modelConf, isAuthorized, scanTime }), logType: "ORPHAN" }
         });
-
-        if (existingActive) {
-            console.log(`[Entry] Duplicate entry attempted for ${vehicleNo}, closing old session and creating ALERT.`);
-            await tx.entryExitLog.update({
-                where: { id: existingActive.id },
-                data: { exitTime: new Date(), vehicleDuration: 0 } // Close the stray previous session quickly
-            });
-
-            await tx.alert.create({
-                data: {
-                    alertType: "CONCURRENT_ENTRY_OVERWRITE",
-                    severity: "HIGH",
-                    description: `Vehicle ${vehicleNo} scanned at ENTRY gate but was already inside. Previous session forcefully closed.`,
-                    vehicleNo,
-                    cameraId: camera.id,
-                    logId: existingActive.id
-                }
-            });
-        }
-
-        await tx.entryExitLog.create({
+        
+        await tx.alert.create({
             data: {
-                cameraId: camera.id,
+                alertType: "ORPHAN_SIGHTING",
+                severity: "LOW",
+                description: `Vehicle scanned at interior camera but has no active ENTRY session.`,
                 vehicleNo,
-                vehicleId: vehicleInfo.vehicleId,
-                rawPlate,
-                ocrConfidence: conf,
-                modelConfidence: modelConf,
-                logType: "ENTRY",
-                isAuthorized: vehicleInfo.isAuthorized,
-                vehicleCategory: vehicleInfo.isAuthorized ? "REGISTERED" : "UNVERIFIED"
+                cameraId,
+                logId: activeSession.id
             }
         });
+    }
+
+    await tx.sighting.create({
+        data: {
+            sessionId: activeSession.id,
+            cameraId,
+            ocrConfidence: confScore,
+            modelConfidence: modelConf
+        }
     });
 }
 
-async function handleExit(camera, vehicleNo, vehicleInfo, rawPlate, conf, modelConf) {
-    return await prisma.$transaction(async (tx) => {
-        const activeSession = await tx.entryExitLog.findFirst({
-            where: { vehicleNo, exitTime: null, logType: "ENTRY" },
+//  AUTHORIZED vehicle — ENTRY 
+async function handleAuthEntry({ tx, camera, vehicleNo, vehicleNoHash, vehicleId, rawPlate, confScore, modelConf, scanTime, cameraId, activeKey }) {
+    const log = await tx.entryExitLog.create({
+        data: { ...buildBaseLogData({ cameraId, vehicleNo, vehicleNoHash, vehicleId, rawPlate, confScore, modelConf, isAuthorized: true, scanTime }), logType: "ENTRY" }
+    });
+    // Store logId + entryTime for fast purely Redis-driven EXIT checks
+    redis.setex(activeKey, VEHICLE_TTL, JSON.stringify({ logId: log.id, entryTime: scanTime.toISOString() })).catch(() => {});
+}
+
+//  AUTHORIZED vehicle — EXIT 
+async function handleAuthExit({ tx, camera, vehicleNo, vehicleNoHash, vehicleId, rawPlate, confScore, modelConf, scanTime, cameraId, activeKey, activeSession }) {
+    let { logId, entryTime } = activeSession ?? {};
+    entryTime = entryTime ? new Date(entryTime) : null;
+
+    if (!logId || !entryTime) {
+        const fallback = await tx.entryExitLog.findFirst({
+            where: { vehicleNoHash, logType: "ENTRY", exitTime: null },
             orderBy: { entryTime: "desc" }
         });
+        if (fallback) { logId = fallback.id; entryTime = fallback.entryTime; }
+    }
 
-        const exitTime = new Date();
+    if (!logId) {
+        console.warn(`[Exit] No active entry session for ${vehicleNo}. Creating standalone EXIT log.`);
+        const anomalyLog = await tx.entryExitLog.create({
+            data: { ...buildBaseLogData({ cameraId, vehicleNo, vehicleNoHash, vehicleId, rawPlate, confScore, modelConf, isAuthorized: true, scanTime }), logType: "EXIT", exitTime: scanTime }
+        });
+        
+        await tx.alert.create({
+            data: {
+                alertType: "EXIT_WITHOUT_ENTRY",
+                severity: "MEDIUM",
+                description: `Registered vehicle scanned at EXIT gate but had no active ENTRY session.`,
+                vehicleNo,
+                cameraId,
+                logId: anomalyLog.id
+            }
+        });
+        return;
+    }
 
-        if (!activeSession) {
-            console.warn(`[Exit] No active entry session for ${vehicleNo}. Creating standalone EXIT log and ALERT.`);
-            const anomalyLog = await tx.entryExitLog.create({
-                data: {
-                    cameraId: camera.id,
-                    vehicleNo,
-                    vehicleId: vehicleInfo.vehicleId,
-                    rawPlate,
-                    ocrConfidence: conf,
-                    modelConfidence: modelConf,
-                    logType: "EXIT",
-                    exitTime,
-                    isAuthorized: vehicleInfo.isAuthorized,
-                    vehicleCategory: vehicleInfo.isAuthorized ? "REGISTERED" : "UNVERIFIED"
-                }
-            });
+    const duration = entryTime ? Math.round((new Date(scanTime) - entryTime) / 1000) : null;
+    await tx.entryExitLog.update({
+        where: { id: logId },
+        data: { logType: "EXIT", exitTime: scanTime, vehicleDuration: duration, cameraId, ocrConfidence: confScore, modelConfidence: modelConf }
+    });
+    redis.del(activeKey).catch(() => {});
+}
 
-            await tx.alert.create({
-                data: {
-                    alertType: "EXIT_WITHOUT_ENTRY",
-                    severity: "MEDIUM",
-                    description: `Vehicle ${vehicleNo} scanned at EXIT gate but had no active ENTRY session.`,
-                    vehicleNo,
-                    cameraId: camera.id,
-                    logId: anomalyLog.id
+//  UNAUTHORIZED vehicle — ENTRY (starts 30-min window)
+async function handleUnauthEntry({ tx, camera, vehicleNo, vehicleNoHash, vehicleId, rawPlate, confScore, modelConf, scanTime, cameraId, unauthKey, activeKey }) {
+    const log = await tx.entryExitLog.create({
+        data: { ...buildBaseLogData({ cameraId, vehicleNo, vehicleNoHash, vehicleId: null, rawPlate, confScore, modelConf, isAuthorized: false, scanTime }), logType: "ENTRY" }
+    });
+
+    const allowedUntil = new Date(new Date(scanTime).getTime() + UNAUTH_TTL * 1000).toISOString();
+    redis.setex(unauthKey, UNAUTH_TTL, JSON.stringify({ logId: log.id, entryTime: new Date(scanTime).toISOString(), allowedUntil })).catch(() => {});
+    redis.setex(activeKey, UNAUTH_TTL, JSON.stringify({ logId: log.id, entryTime: new Date(scanTime).toISOString() })).catch(() => {});
+}
+
+//  UNAUTHORIZED vehicle — RESCAN (overstay or normal exit)
+async function handleUnauthRescan({ tx, camera, vehicleNo, vehicleNoHash, scanTime, cameraId, unauthData, unauthKey, activeKey }) {
+    const { logId, entryTime, allowedUntil } = JSON.parse(unauthData);
+    const isOverdue = new Date(scanTime) > new Date(allowedUntil);
+    const duration = Math.round((new Date(scanTime) - new Date(entryTime)) / 1000);
+
+    await tx.entryExitLog.update({
+        where: { id: logId },
+        data: { logType: "EXIT", exitTime: scanTime, vehicleDuration: duration }
+    });
+    
+    if (isOverdue) {
+        await tx.alert.create({
+            data: {
+                alertType: "OVERSTAY",
+                severity: "HIGH",
+                description: `Unverified vehicle overstayed 30-minute limit. Total duration: ${duration}s`,
+                vehicleNo,
+                cameraId,
+                logId
+            }
+        });
+    }
+
+    clearUnauthSession(unauthKey, activeKey).catch(() => {});
+}
+
+// ── Main Orchestrator for BullMQ ──
+export async function processScanJob(jobData) {
+    if (!jobData.camera_id || !jobData.vehicleNo) throw new ValidationError("Missing inputs");
+
+    const vehicleNo = jobData.vehicleNo;
+    const vehicleNoHash = hashField(vehicleNo);
+    const lockKey = `lock:vehicle:${vehicleNoHash}`;
+    let lock;
+    
+    try {
+        lock = await redlock.acquire([lockKey], 3000);
+
+        const camera = await fetchCameraFromCache(jobData.camera_id);
+        const authInfo = await resolveVehicle(vehicleNo);
+        const isAuthorized = authInfo.isAuthorized;
+
+        const ctxBase = {
+            camera, vehicleNo, vehicleNoHash, vehicleId: authInfo.vehicleId ?? null, 
+            rawPlate: jobData.rawPlate, confScore: jobData.confidence, modelConf: jobData.model_confidence,
+            isAuthorized, scanTime: new Date(jobData.scanTime), cameraId: jobData.camera_id
+        };
+
+        if (camera.cameraType === "SIGHTING" || camera.cameraType === "INTERIOR") {
+            await prisma.$transaction(async (tx) => handleSighting({ ...ctxBase, tx }));
+            return;
+        }
+
+        const activeKey = KEY_ACTIVE(vehicleNo);
+        const activeRaw = await redis.get(activeKey);
+        const activeSession = activeRaw ? JSON.parse(activeRaw) : null;
+
+        if (isAuthorized) {
+            await prisma.$transaction(async (tx) => {
+                if (activeSession) {
+                    await handleAuthExit({ ...ctxBase, tx, activeKey, activeSession });
+                } else {
+                    await handleAuthEntry({ ...ctxBase, tx, activeKey });
                 }
             });
             return;
         }
 
-        const duration = Math.round((exitTime - activeSession.entryTime) / 1000);
+        const unauthKey = KEY_UNAUTH(vehicleNo);
+        const unauthData = await redis.get(unauthKey);
 
-        await tx.entryExitLog.update({
-            where: { id: activeSession.id },
-            data: {
-                exitTime,
-                vehicleDuration: duration
+        await prisma.$transaction(async (tx) => {
+            if (unauthData) {
+                await handleUnauthRescan({ ...ctxBase, tx, unauthData, unauthKey, activeKey });
+            } else if (!activeSession) {
+                await handleUnauthEntry({ ...ctxBase, tx, unauthKey, activeKey });
+            } else {
+                // Edge case: unauth vehicle has active session but unauth session expired heavily out of redis cache (over 30m)
+                await tx.entryExitLog.update({
+                    where: { id: activeSession.logId },
+                    data: { logType: "EXIT", exitTime: ctxBase.scanTime }
+                });
+                await tx.alert.create({
+                    data: { 
+                        alertType: "OVERSTAY", 
+                        severity: "HIGH", 
+                        description: `Unverified vehicle exited. Session heavily exceeded 30m timeline bounds.`, 
+                        vehicleNo, 
+                        cameraId: camera.id, 
+                        logId: activeSession.logId 
+                    }
+                });
+                clearUnauthSession(unauthKey, activeKey).catch(() => {});
             }
         });
-    });
-}
-
-async function handleSighting(camera, vehicleNo, vehicleInfo, rawPlate, conf, modelConf) {
-    return await prisma.$transaction(async (tx) => {
-        let activeSession = await tx.entryExitLog.findFirst({
-            where: { vehicleNo, exitTime: null, logType: "ENTRY" },
-            orderBy: { entryTime: "desc" }
-        });
-
-        if (!activeSession) {
-            console.warn(`[Sighting] No active session for ${vehicleNo}. Creating ORPHAN session and ALERT.`);
-            activeSession = await tx.entryExitLog.create({
-                data: {
-                    cameraId: camera.id,
-                    vehicleNo,
-                    vehicleId: vehicleInfo.vehicleId,
-                    rawPlate,
-                    ocrConfidence: conf,
-                    modelConfidence: modelConf,
-                    logType: "ORPHAN",
-                    isAuthorized: vehicleInfo.isAuthorized,
-                    vehicleCategory: vehicleInfo.isAuthorized ? "REGISTERED" : "UNVERIFIED"
-                }
-            });
-
-            await tx.alert.create({
-                data: {
-                    alertType: "ORPHAN_SIGHTING",
-                    severity: "LOW",
-                    description: `Vehicle ${vehicleNo} spotted at interior camera but has no active ENTRY session.`,
-                    vehicleNo,
-                    cameraId: camera.id,
-                    logId: activeSession.id
-                }
-            });
-        }
-
-        await tx.sighting.create({
-            data: {
-                sessionId: activeSession.id,
-                cameraId: camera.id,
-                ocrConfidence: conf,
-                modelConfidence: modelConf
-            }
-        });
-    });
-}
-
-// Main Orchestrator
-export async function processScanJob(jobData) {
-    const data = validateInput(jobData);
-    applyConfidenceLogic(data.confidence, data.model_confidence);
-    
-    // Concurrency Lock: Ensure absolute linearity per strict vehicle
-    const lockKey = `lock:vehicle:${data.vehicleNo}`;
-    let lock;
-    try {
-        lock = await redlock.acquire([lockKey], 3000); // 3 sec lock
-
-        const camera = await fetchCameraFromCache(data.camera_id);
-        const vehicleInfo = await resolveVehicle(data.vehicleNo);
-
-        if (camera.cameraType === "ENTRY") {
-            await handleEntry(camera, data.vehicleNo, vehicleInfo, data.rawPlate, data.confidence, data.model_confidence);
-        } else if (camera.cameraType === "EXIT") {
-            await handleExit(camera, data.vehicleNo, vehicleInfo, data.rawPlate, data.confidence, data.model_confidence);
-        } else if (camera.cameraType === "SIGHTING") {
-            await handleSighting(camera, data.vehicleNo, vehicleInfo, data.rawPlate, data.confidence, data.model_confidence);
-        }
 
     } finally {
-        // Guarantee unlocking even if an unexpected error occurs during transactions
         if (lock) await lock.release().catch(() => {});
     }
 }
-
-// Expose these empty fallbacks just so the older analytics controllers (getLogs) don't crash
-export const KEY_ACTIVE = (plate) => `active:${plate}`;
-export const KEY_UNAUTH = (plate) => `unauth:${plate}`;

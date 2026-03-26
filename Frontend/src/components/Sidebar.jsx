@@ -1,5 +1,5 @@
 import { NavLink, useNavigate, useLocation } from 'react-router-dom';
-import { LayoutDashboard, Car, Camera, ClipboardList, LogOut, X } from 'lucide-react';
+import { LayoutDashboard, Car, Camera, ClipboardList, LogOut, X, KeyRound } from 'lucide-react';
 import { logout } from '../api';
 
 const nav = [
@@ -71,6 +71,14 @@ export default function Sidebar({ isOpen, onClose }) {
               <span>DTU Campus</span>
             </div>
           </div>
+          <NavLink
+            to="/change-password"
+            className={({ isActive }) => `nav-item ${isActive ? 'active' : ''}`}
+            onClick={handleNavClick}
+            style={{ fontSize: 13, margin: '4px 0' }}
+          >
+            <KeyRound size={16} /> Change Password
+          </NavLink>
           <button className="logout-btn" onClick={handleLogout}>
             <LogOut size={14} style={{ marginRight: 6, verticalAlign: 'middle' }} />
             Sign Out

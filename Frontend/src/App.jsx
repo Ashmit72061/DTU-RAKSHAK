@@ -5,6 +5,8 @@ import MobileHeader from './components/MobileHeader';
 import Landing from './pages/Landing';
 import Login from './pages/Login';
 import Signup from './pages/Signup';
+import ForgotPassword from './pages/ForgotPassword';
+import ChangePassword from './pages/ChangePassword';
 import Dashboard from './pages/Dashboard';
 import Vehicles from './pages/Vehicles';
 import Cameras from './pages/Cameras';
@@ -37,12 +39,15 @@ export default function App() {
     <BrowserRouter>
       <Routes>
         {/* Public routes */}
-        <Route path="/" element={<Landing />} />
+        <Route path="/" element={authed ? <Navigate to="/dashboard" replace /> : <Landing />} />
         <Route path="/login" element={
           authed ? <Navigate to="/dashboard" replace /> : <Login onLogin={handleLogin} />
         } />
         <Route path="/signup" element={
           authed ? <Navigate to="/dashboard" replace /> : <Signup onLogin={handleLogin} />
+        } />
+        <Route path="/forgot-password" element={
+          authed ? <Navigate to="/dashboard" replace /> : <ForgotPassword />
         } />
 
         {/* Protected dashboard routes */}
@@ -58,6 +63,10 @@ export default function App() {
         <Route path="/logs" element={
           <RequireAuth><PrivateLayout><Logs /></PrivateLayout></RequireAuth>
         } />
+        <Route path="/change-password" element={
+          <RequireAuth><PrivateLayout><ChangePassword /></PrivateLayout></RequireAuth>
+        } />
+
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </BrowserRouter>
