@@ -10,6 +10,7 @@ import vehicleRoutes from "./routes/vehicle.routes.js";
 import cameraRoutes from "./routes/camera.routes.js";
 import scanRoutes from "./routes/scan.routes.js";
 import alertRoutes from "./routes/alert.routes.js";
+import deviceRoutes from "./routes/device.routes.js";
 import errorHandler from "./middlewares/error.middleware.js";
 import ApiResponse from "./utils/ApiResponse.js";
 import { sseMiddleware } from "./utils/sse.js";
@@ -53,6 +54,7 @@ app.use("/api/v1/health",   limiter, (req, res) => res.status(200).json(new ApiR
 app.use("/api/v1/auth",     limiter, authRoutes);
 app.use("/api/v1/vehicles", limiter, vehicleRoutes);
 app.use("/api/v1/cameras",  limiter, cameraRoutes);
+app.use("/api/v1/devices", limiter, deviceRoutes);
 
 // Generous sanity-check limit for camera hardware
 // Prevents an infinite-loop bug on a camera from flooding Redis memory,

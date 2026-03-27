@@ -5,6 +5,7 @@ generator client {
 datasource db {
   provider = "postgresql"
   url      = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL") 
 }
 
 // ── Admin / User ─────────────────────────────────────────────────────────────
@@ -159,4 +160,14 @@ model Alert {
   updatedAt   DateTime @updatedAt
 
   @@map("alerts")
+}
+
+model DeviceToken {
+  id        String   @id @default(uuid())
+  token     String   @unique
+  userId    String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("device_tokens")
 }

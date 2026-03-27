@@ -3,6 +3,7 @@ node_modules/
 *.log
 dist/
 
+firebase-service-account.json
 
 # Logs
 logs

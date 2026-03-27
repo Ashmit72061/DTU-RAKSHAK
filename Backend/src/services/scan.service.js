@@ -4,6 +4,7 @@ import redlock from "../utils/redlock.js";
 import { hashField } from "../utils/crypto.util.js";
 import { alertEmitter } from "../utils/sse.js";
 import { scanQueue } from "../utils/queue.js";
+import { sendPushNotification } from "../utils/firebase.js";
 import { 
     ValidationError, 
     CameraNotFoundError 
@@ -18,7 +19,32 @@ export const VEHICLE_TTL = 24 * 60 * 60;                   // 24 hours in second
 async function broadcastAlert(tx, alertData) {
     const alert = await tx.alert.create({ data: alertData });
     alertEmitter.emit("NEW_ALERT", alert);
+
+    // FCM push — runs outside transaction, never blocks scan processing
+    sendPushNotification({
+        title: formatAlertTitle(alert.alertType),
+        body: alert.description,
+        data: {
+            alertId:   alert.id,
+            alertType: alert.alertType,
+            logId:     alert.logId,
+            rawPlate:  alert.rawPlate,
+        },
+    }).catch(err => console.error("[FCM] Push error:", err.message));
+
     return alert;
+}
+
+function formatAlertTitle(type) {
+    const map = {
+        ORPHAN_SIGHTING:            "Vehicle spotted inside campus",
+        EXIT_WITHOUT_ENTRY:         "Exit without entry detected",
+        CONCURRENT_ENTRY_OVERWRITE: "Duplicate entry detected",
+        OVERSTAY:                   "Vehicle overstay",
+        ACTIVE_OVERSTAY_ALARM:      "Overstay alarm — vehicle still inside",
+        UNAUTHORIZED_ENTRY:         "Unauthorized entry",
+    };
+    return map[type] ?? "Campus alert";
 }
 
 const buildBaseLogData = ({ cameraId, vehicleNo, vehicleNoHash, vehicleId, rawPlate, confScore, modelConf, isAuthorized, scanTime }) => ({
