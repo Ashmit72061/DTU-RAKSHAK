@@ -25,50 +25,26 @@ export async function sendPushNotification({ title, body, data = {} }) {
 
     const tokenList = tokens.map(t => t.token);
 
-    // FCM requires all data values to be strings
-    const stringData = Object.fromEntries(
-        Object.entries(data).map(([k, v]) => [k, String(v ?? "")])
-    );
+    // Merge title and body INTO the data object
+    const stringData = {
+        ...Object.fromEntries(
+            Object.entries(data).map(([k, v]) => [k, String(v ?? "")])
+        ),
+        title: title, // Move title here
+        message: body // Move body here
+    };
 
-    let response;
     try {
-        response = await admin.messaging().sendEachForMulticast({
+        await admin.messaging().sendEachForMulticast({
             tokens: tokenList,
-            notification: { title, body },
+            // REMOVE the notification object entirely
+            // notification: { title, body }, 
             data: stringData,
             android: {
                 priority: "high",
-                notification: {
-                    channelId: "alerts",
-                    sound: "default",
-                    priority: "max",
-                    visibility: "public",
-                },
             },
         });
     } catch (err) {
         console.error("[FCM] sendEachForMulticast failed:", err.message);
-        return;
-    }
-
-    console.log(`[FCM] Sent: ${response.successCount} ok, ${response.failureCount} failed`);
-
-    // Clean up dead tokens
-    const failed = [];
-    response.responses.forEach((r, i) => {
-        if (!r.success) {
-            console.warn(`[FCM] Token failed: ${r.error?.code}`);
-            if (
-                r.error?.code === "messaging/invalid-registration-token" ||
-                r.error?.code === "messaging/registration-token-not-registered"
-            ) {
-                failed.push(tokenList[i]);
-            }
-        }
-    });
-
-    if (failed.length > 0) {
-        await prisma.deviceToken.deleteMany({ where: { token: { in: failed } } });
-        console.log(`[FCM] Removed ${failed.length} invalid token(s)`);
     }
 }
