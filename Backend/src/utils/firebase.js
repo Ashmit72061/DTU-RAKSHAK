@@ -18,33 +18,42 @@ if (serviceAccount && !admin.apps.length) {
 }
 
 export async function sendPushNotification({ title, body, data = {} }) {
-    if (!serviceAccount || !admin.apps.length) return;
+    if (!serviceAccount || !admin.apps.length) {
+        console.error("[FCM] Service account not loaded");
+        return;
+    }
 
     const tokens = await prisma.deviceToken.findMany();
+    console.log(`[FCM] Found ${tokens.length} tokens to notify`); // Add this debug line
+    
     if (tokens.length === 0) return;
 
     const tokenList = tokens.map(t => t.token);
 
-    // Merge title and body INTO the data object
+    // CRITICAL: Ensure all data values are strings and title/body are included here
     const stringData = {
         ...Object.fromEntries(
             Object.entries(data).map(([k, v]) => [k, String(v ?? "")])
         ),
-        title: title, // Move title here
-        message: body // Move body here
+        title: title,
+        message: body,
+        channelId: "alerts" // Ensure Android uses the correct channel
     };
 
     try {
-        await admin.messaging().sendEachForMulticast({
+        const response = await admin.messaging().sendEachForMulticast({
             tokens: tokenList,
-            // REMOVE the notification object entirely
-            // notification: { title, body }, 
-            data: stringData,
+            // We REMOVE the notification object to force Android to use onMessageReceived
+            data: stringData, 
             android: {
-                priority: "high",
+                priority: "high", // Force wake up
             },
         });
+
+        console.log(`[FCM] Result: ${response.successCount} sent, ${response.failureCount} failed`);
+
+        // Clean up invalid tokens as you already have in your code...
     } catch (err) {
-        console.error("[FCM] sendEachForMulticast failed:", err.message);
+        console.error("[FCM] Error in sendEachForMulticast:", err);
     }
 }
