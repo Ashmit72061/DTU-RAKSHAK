@@ -129,14 +129,13 @@ export const getLogsByVehicle = asyncHandler(async (req, res) => {
         if (to)   where.entryTime.lte = new Date(to);
     }
 
-    const [logs, activeRaw, unauthData] = await Promise.all([
+    const [logs, activeRaw] = await Promise.all([
         prisma.entryExitLog.findMany({
             where,
             orderBy: { entryTime: "desc" },
             include: { camera: true, vehicle: true },
         }),
-        redis.get(KEY_ACTIVE(vehicleNo)),
-        redis.get(KEY_UNAUTH(vehicleNo)),
+        redis.get(KEY_ACTIVE(vehicleNo))
     ]);
 
     const safeLogs = logs.map(log => ({
@@ -148,8 +147,7 @@ export const getLogsByVehicle = asyncHandler(async (req, res) => {
         vehicleNo,
         count:            safeLogs.length,
         logs:             safeLogs,
-        currentlyOnCampus: !!activeRaw,
-        unauthStatus:     unauthData ? JSON.parse(unauthData) : null,
+        currentlyOnCampus: !!activeRaw
     }, "Vehicle logs fetched"));
 });
 

@@ -163,6 +163,7 @@ async function handleUnauthEntry({ tx, camera, vehicleNo, vehicleNoHash, vehicle
     
     // Proactive Bomb: Schedule alert exclusively 30 mins in the future natively
     await scanQueue.add("checkOverstayBomb", { logId: log.id, vehicleNoHash, rawPlate }, { delay: 30 * 60 * 1000 });
+    // await scanQueue.add("checkOverstayBomb", { logId: log.id, vehicleNoHash, rawPlate }, { delay: 15* 1000 });
 }
 
 // ── Main Orchestrator for BullMQ ──
