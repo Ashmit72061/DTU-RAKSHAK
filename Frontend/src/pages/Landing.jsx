@@ -13,7 +13,7 @@ const features = [
 const team = [
   { name: 'Ekansh Bhushan', role: 'Backend & DevOps', emoji: '👨‍💻' },
   { name: 'Harsh', role: 'Frontend & UI/UX', emoji: '🎨' },
-  { name: 'Kapil Bhait', role: 'ML Model & Training', emoji: '🤖' },
+  { name: 'Kapil Bhati', role: 'ML Model & Training', emoji: '🤖' },
   { name: 'Reena Gupta', role: 'System Architecture', emoji: '⚙️' },
   { name: 'Soliya Showkat', role: 'System Architecture', emoji: '⚙️' },
   { name: 'Ashmit Bindal', role: 'Frontend & Backend', emoji: '⚙️' },
