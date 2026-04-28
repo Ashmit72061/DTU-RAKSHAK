@@ -112,7 +112,7 @@ export default function Landing() {
         <div className="hero-grid" aria-hidden="true" />
 
         <div className="landing-hero-content hero-animate-left">
-          <div className="landing-hero-badge animate-badge">Delhi Technological University</div>
+          <div className="landing-hero-badge animate-badge">Delhi Technological University </div>
           <h1 className="landing-hero-title">
             Smart Vehicle<br />
             <span className="landing-hero-accent gradient-text">Campus Monitoring</span>
