@@ -11,10 +11,18 @@ const features = [
 ];
 
 const team = [
-  { name: 'Team Member 1', role: 'Backend & AI Integration', emoji: '👨‍💻' },
-  { name: 'Team Member 2', role: 'Frontend & UI/UX', emoji: '🎨' },
-  { name: 'Team Member 3', role: 'ML Model & Training', emoji: '🤖' },
-  { name: 'Team Member 4', role: 'System Architecture', emoji: '⚙️' },
+  { name: 'Ekansh Bhushan', role: 'Backend & DevOps', emoji: '👨‍💻' },
+  { name: 'Harsh', role: 'Frontend & UI/UX', emoji: '🎨' },
+  { name: 'Kapil Bhait', role: 'ML Model & Training', emoji: '🤖' },
+  { name: 'Reena Gupta', role: 'System Architecture', emoji: '⚙️' },
+  { name: 'Soliya Showkat', role: 'System Architecture', emoji: '⚙️' },
+  { name: 'Ashmit Bindal', role: 'Frontend & Backend', emoji: '⚙️' },
+  { name: 'Sonal Verma', role: 'Frontend & Backend', emoji: '⚙️' },
+  { name: 'Suvan Kumar', role: 'System Architecture', emoji: '⚙️' },
+  { name: 'Aahant Kumar', role: 'ML Model & Training', emoji: '⚙️' },
+  { name: 'Nakul', role: 'Hardware Integration', emoji: '⚙️' },
+  { name: 'Sarvesh', role: 'Hardware Integration', emoji: '⚙️' },
+  { name: 'Rajni', role: 'Automation', emoji: '⚙️' },
 ];
 
 // Floating particles data
@@ -104,7 +112,7 @@ export default function Landing() {
         <div className="hero-grid" aria-hidden="true" />
 
         <div className="landing-hero-content hero-animate-left">
-          <div className="landing-hero-badge animate-badge">SkillOp Technical Society · DTU</div>
+          <div className="landing-hero-badge animate-badge">Delhi Technological University</div>
           <h1 className="landing-hero-title">
             Smart Vehicle<br />
             <span className="landing-hero-accent gradient-text">Campus Monitoring</span>
@@ -188,7 +196,7 @@ export default function Landing() {
       <section id="team" className="landing-section">
         <div className="landing-section-header reveal">
           <h2>Developer Team</h2>
-          <p>Built under SkillOp Technical Society, Delhi Technological University</p>
+          <p>Built by Delhi Technological University</p>
         </div>
         <div className="team-grid">
           {team.map((m, i) => (
@@ -196,7 +204,7 @@ export default function Landing() {
               <div className="team-avatar">{m.emoji}</div>
               <h3>{m.name}</h3>
               <p>{m.role}</p>
-              <div className="team-badge">DTU · SkillOp</div>
+              <div className="team-badge">Project Rakshak DTU</div>
             </div>
           ))}
         </div>
@@ -206,7 +214,7 @@ export default function Landing() {
       <footer className="landing-footer">
         <img src="/dtu-logo.png" alt="DTU" />
         <p><strong>DTU Rakshak</strong> — Campus Vehicle Monitoring System</p>
-        <p className="footer-sub">Delhi Technological University · SkillOp Technical Society · 2025</p>
+        <p className="footer-sub">Delhi Technological University · 2026</p>
       </footer>
 
     </div>
