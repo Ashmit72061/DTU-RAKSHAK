@@ -2,12 +2,21 @@ import app from "./app.js";
 import env from "./configs/env.config.js";
 import prisma from "./models/prisma.js";
 import "./workers/scan.worker.js"; // Initialize BullMQ background worker
+import path from "path"
+import express from "express";
 
 const startServer = async () => {
     try {
         // Verify database connectivity
         await prisma.$connect();
         console.log("✅ Database connected");
+
+        const _dirname = path.resolve();
+        app.use(express.static(path.join(_dirname, '../../Frontend/dist')));
+    
+        app.get(/^(?!\/api).+/, (req, res) =>
+            res.sendFile(path.join(_dirname, '../../Frontend/dist/index.html'))
+        );
 
         app.listen(env.port, () => {
             console.log(`🚀 Server running on port ${env.port} [${env.nodeEnv}]`);
